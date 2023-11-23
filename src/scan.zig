@@ -454,8 +454,8 @@ const Context = struct {
 var active_context: *Context = undefined;
 
 // Read and index entries of the given dir.
-fn scanDir(ctx: *Context, pat: *const exclude.Patterns, dir: std.fs.IterableDir, dir_dev: u64) void {
-    var it = main.allocator.create(std.fs.IterableDir.Iterator) catch unreachable;
+fn scanDir(ctx: *Context, pat: *const exclude.Patterns, dir: std.fs.Dir, dir_dev: u64) void {
+    var it = main.allocator.create(std.fs.Dir.Iterator) catch unreachable;
     defer main.allocator.destroy(it);
     it.* = dir.iterate();
     while(true) {
@@ -475,7 +475,7 @@ fn scanDir(ctx: *Context, pat: *const exclude.Patterns, dir: std.fs.IterableDir,
             continue;
         }
 
-        ctx.stat = Stat.read(dir.dir, ctx.name, false) catch {
+        ctx.stat = Stat.read(dir, ctx.name, false) catch {
             ctx.addSpecial(.err);
             continue;
         };
@@ -485,7 +485,7 @@ fn scanDir(ctx: *Context, pat: *const exclude.Patterns, dir: std.fs.IterableDir,
         }
 
         if (main.config.follow_symlinks and ctx.stat.symlink) {
-            if (Stat.read(dir.dir, ctx.name, true)) |nstat| {
+            if (Stat.read(dir, ctx.name, true)) |nstat| {
                 if (!nstat.dir) {
                     ctx.stat = nstat;
                     // Symlink targets may reside on different filesystems,
@@ -502,20 +502,19 @@ fn scanDir(ctx: *Context, pat: *const exclude.Patterns, dir: std.fs.IterableDir,
 
         var edir =
             if (!ctx.stat.dir) null
-            else if (dir.dir.openDirZ(ctx.name, .{ .no_follow = true }, true)) |d| std.fs.IterableDir{.dir = d}
-            else |_| {
+            else dir.openDirZ(ctx.name, .{ .no_follow = true, .iterate = true }) catch {
                 ctx.addSpecial(.err);
                 continue;
             };
         defer if (edir != null) edir.?.close();
 
-        if (@import("builtin").os.tag == .linux and main.config.exclude_kernfs and ctx.stat.dir and isKernfs(edir.?.dir, ctx.stat.dev)) {
+        if (@import("builtin").os.tag == .linux and main.config.exclude_kernfs and ctx.stat.dir and isKernfs(edir.?, ctx.stat.dev)) {
             ctx.addSpecial(.kernfs);
             continue;
         }
 
         if (main.config.exclude_caches and ctx.stat.dir) {
-            if (edir.?.dir.openFileZ("CACHEDIR.TAG", .{})) |f| {
+            if (edir.?.openFileZ("CACHEDIR.TAG", .{})) |f| {
                 const sig = "Signature: 8a477f597d28d172789f06886806bc55";
                 var buf: [sig.len]u8 = undefined;
                 if (f.reader().readAll(&buf)) |len| {
@@ -562,14 +561,13 @@ pub fn setupRefresh(parent: *model.Dir) void {
 // To be called after setupRefresh() (or from scanRoot())
 pub fn scan() void {
     defer active_context.deinit();
-    const dir_ = std.fs.cwd().openDirZ(active_context.pathZ(), .{}, true) catch |e| {
+    var dir = std.fs.cwd().openDirZ(active_context.pathZ(), .{ .iterate = true }) catch |e| {
         active_context.last_error = main.allocator.dupeZ(u8, active_context.path.items) catch unreachable;
         active_context.fatal_error = e;
         while (main.state == .refresh or main.state == .scan)
             main.handleEvent(true, true);
         return;
     };
-    var dir = std.fs.IterableDir{.dir = dir_};
     defer dir.close();
     var pat = exclude.getPatterns(active_context.pathZ());
     defer pat.deinit();
