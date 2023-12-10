@@ -280,7 +280,7 @@ const styles = [_]StyleDef{
 
 pub const Style = lbl: {
     comptime var fields: [styles.len]std.builtin.Type.EnumField = undefined;
-    inline for (&fields, styles, 0..) |*field, s, i| {
+    for (&fields, styles, 0..) |*field, s, i| {
         field.* = .{
             .name = s.name,
             .value = i,
