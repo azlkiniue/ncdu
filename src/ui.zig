@@ -194,7 +194,7 @@ test "shorten" {
 
 const StyleAttr = struct { fg: i16, bg: i16, attr: u32 };
 const StyleDef = struct {
-    name: []const u8,
+    name: [:0]const u8,
     off: StyleAttr,
     dark: StyleAttr,
     darkbg: StyleAttr,
@@ -279,7 +279,7 @@ const styles = [_]StyleDef{
 };
 
 pub const Style = lbl: {
-    comptime var fields: [styles.len]std.builtin.Type.EnumField = undefined;
+    var fields: [styles.len]std.builtin.Type.EnumField = undefined;
     for (&fields, styles, 0..) |*field, s, i| {
         field.* = .{
             .name = s.name,
