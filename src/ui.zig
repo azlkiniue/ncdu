@@ -343,7 +343,7 @@ pub fn init() void {
     clearScr();
     if (main.config.nc_tty) {
         const tty = c.fopen("/dev/tty", "r+");
-        if (tty == null) die("Error opening /dev/tty: {s}.\n", .{ c.strerror(@intFromEnum(std.c.getErrno(-1))) });
+        if (tty == null) die("Error opening /dev/tty: {s}.\n", .{ c.strerror(@intFromEnum(std.posix.errno(-1))) });
         const term = c.newterm(null, tty, tty);
         if (term == null) die("Error initializing ncurses.\n", .{});
         _ = c.set_term(term);
@@ -473,14 +473,14 @@ pub fn addnum(bg: Bg, v: u64) void {
 
 // Print a file mode, takes 10 columns
 pub fn addmode(mode: u32) void {
-    addch(switch (mode & std.os.S.IFMT) {
-        std.os.S.IFDIR  => 'd',
-        std.os.S.IFREG  => '-',
-        std.os.S.IFLNK  => 'l',
-        std.os.S.IFIFO  => 'p',
-        std.os.S.IFSOCK => 's',
-        std.os.S.IFCHR  => 'c',
-        std.os.S.IFBLK  => 'b',
+    addch(switch (mode & std.posix.S.IFMT) {
+        std.posix.S.IFDIR  => 'd',
+        std.posix.S.IFREG  => '-',
+        std.posix.S.IFLNK  => 'l',
+        std.posix.S.IFIFO  => 'p',
+        std.posix.S.IFSOCK => 's',
+        std.posix.S.IFCHR  => 'c',
+        std.posix.S.IFBLK  => 'b',
         else => '?'
     });
     addch(if (mode &  0o400 > 0) 'r' else '-');
@@ -491,7 +491,7 @@ pub fn addmode(mode: u32) void {
     addch(if (mode & 0o2000 > 0) 's' else if (mode & 0o010 > 0) @as(u7, 'x') else '-');
     addch(if (mode &  0o004 > 0) 'r' else '-');
     addch(if (mode &  0o002 > 0) 'w' else '-');
-    addch(if (mode & 0o1000 > 0) (if (std.os.S.ISDIR(mode)) @as(u7, 't') else 'T') else if (mode & 0o001 > 0) @as(u7, 'x') else '-');
+    addch(if (mode & 0o1000 > 0) (if (std.posix.S.ISDIR(mode)) @as(u7, 't') else 'T') else if (mode & 0o001 > 0) @as(u7, 'x') else '-');
 }
 
 // Print a timestamp, takes 25 columns
@@ -592,5 +592,5 @@ pub fn getch(block: bool) i32 {
         return ch;
     }
     die("Error reading keyboard input, assuming TTY has been lost.\n(Potentially nonsensical error message: {s})\n",
-        .{ c.strerror(@intFromEnum(std.c.getErrno(-1))) });
+        .{ c.strerror(@intFromEnum(std.posix.errno(-1))) });
 }

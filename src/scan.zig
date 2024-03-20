@@ -32,17 +32,17 @@ const Stat = struct {
     }
 
     fn read(parent: std.fs.Dir, name: [:0]const u8, follow: bool) !Stat {
-        const stat = try std.os.fstatatZ(parent.fd, name, if (follow) 0 else std.os.AT.SYMLINK_NOFOLLOW);
+        const stat = try std.posix.fstatatZ(parent.fd, name, if (follow) 0 else std.posix.AT.SYMLINK_NOFOLLOW);
         return Stat{
             .blocks = clamp(Stat, .blocks, stat.blocks),
             .size = clamp(Stat, .size, stat.size),
             .dev = truncate(Stat, .dev, stat.dev),
             .ino = truncate(Stat, .ino, stat.ino),
             .nlink = clamp(Stat, .nlink, stat.nlink),
-            .hlinkc = stat.nlink > 1 and !std.os.system.S.ISDIR(stat.mode),
-            .dir = std.os.system.S.ISDIR(stat.mode),
-            .reg = std.os.system.S.ISREG(stat.mode),
-            .symlink = std.os.system.S.ISLNK(stat.mode),
+            .hlinkc = stat.nlink > 1 and !std.posix.S.ISDIR(stat.mode),
+            .dir = std.posix.S.ISDIR(stat.mode),
+            .reg = std.posix.S.ISREG(stat.mode),
+            .symlink = std.posix.S.ISLNK(stat.mode),
             .ext = .{
                 .mtime = clamp(model.Ext, .mtime, stat.mtime().tv_sec),
                 .uid = truncate(model.Ext, .uid, stat.uid),

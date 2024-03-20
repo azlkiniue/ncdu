@@ -365,7 +365,7 @@ fn spawnShell() void {
     else
         env.put("NCDU_LEVEL", "1") catch unreachable;
 
-    const shell = std.os.getenvZ("NCDU_SHELL") orelse std.os.getenvZ("SHELL") orelse "/bin/sh";
+    const shell = std.posix.getenvZ("NCDU_SHELL") orelse std.posix.getenvZ("SHELL") orelse "/bin/sh";
     var child = std.process.Child.init(&.{shell}, allocator);
     child.cwd = path.items;
     child.env_map = &env;
@@ -433,7 +433,7 @@ pub fn main() void {
                 config.thousands_sep = span;
         }
     }
-    if (std.os.getenvZ("NO_COLOR") == null) config.ui_color = .darkbg;
+    if (std.posix.getenvZ("NO_COLOR") == null) config.ui_color = .darkbg;
 
     const loadConf = blk: {
         var args = std.process.ArgIteratorPosix.init();
@@ -446,11 +446,11 @@ pub fn main() void {
     if (loadConf) {
         tryReadArgsFile("/etc/ncdu.conf");
 
-        if (std.os.getenvZ("XDG_CONFIG_HOME")) |p| {
+        if (std.posix.getenvZ("XDG_CONFIG_HOME")) |p| {
             const path = std.fs.path.joinZ(allocator, &.{p, "ncdu", "config"}) catch unreachable;
             defer allocator.free(path);
             tryReadArgsFile(path);
-        } else if (std.os.getenvZ("HOME")) |p| {
+        } else if (std.posix.getenvZ("HOME")) |p| {
             const path = std.fs.path.joinZ(allocator, &.{p, ".config", "ncdu", "config"}) catch unreachable;
             defer allocator.free(path);
             tryReadArgsFile(path);
