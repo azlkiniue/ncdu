@@ -433,7 +433,6 @@ pub fn main() void {
                 config.thousands_sep = span;
         }
     }
-    if (std.posix.getenvZ("NO_COLOR") == null) config.ui_color = .darkbg;
 
     const loadConf = blk: {
         var args = std.process.ArgIteratorPosix.init();
