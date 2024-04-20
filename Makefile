@@ -13,7 +13,7 @@ ZIG_FLAGS ?= --release
 
 NCDU_VERSION=$(shell grep 'program_version = "' src/main.zig | sed -e 's/^.*"\(.\+\)".*$$/\1/')
 
-.PHONY: build
+.PHONY: build test
 build: release
 
 release:
@@ -93,3 +93,8 @@ static:\
 	static-linux-x86 \
 	static-linux-aarch64 \
 	static-linux-arm
+
+test:
+	zig build test
+	mandoc -T lint ncdu.1
+	reuse lint
