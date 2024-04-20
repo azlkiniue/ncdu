@@ -9,7 +9,7 @@ ZIG ?= zig
 PREFIX ?= /usr/local
 BINDIR ?= ${PREFIX}/bin
 MANDIR ?= ${PREFIX}/share/man/man1
-ZIG_FLAGS ?= -Doptimize=ReleaseFast
+ZIG_FLAGS ?= --release
 
 NCDU_VERSION=$(shell grep 'program_version = "' src/main.zig | sed -e 's/^.*"\(.\+\)".*$$/\1/')
 
@@ -65,7 +65,7 @@ static-%.tar.gz:
 		CC="${ZIG} cc --target=$*"\
 		LD="${ZIG} cc --target=$*"\
 		AR="${ZIG} ar" RANLIB="${ZIG} ranlib"\
-		CPPFLAGS=-D_GNU_SOURCE && make && make install.libs
+		CPPFLAGS=-D_GNU_SOURCE && make -j8 && make install.libs
 	@# zig-build - cleaner approach but doesn't work, results in a dynamically linked binary.
 	@#cd static-$* && PKG_CONFIG_LIBDIR="`pwd`/inst/pkg" zig build -Dtarget=$*
 	@#	--build-file ../build.zig --search-prefix inst/ --cache-dir zig -Drelease-fast=true
