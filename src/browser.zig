@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2021-2023 Yoran Heling <projects@yorhel.nl>
+// SPDX-FileCopyrightText: Yorhel <projects@yorhel.nl>
 // SPDX-License-Identifier: MIT
 
 const std = @import("std");
@@ -670,7 +670,7 @@ const help = struct {
         ui.style(.num);
         box.move(7, 43); ui.addstr(main.program_version);
         ui.style(.default);
-        box.move(9,  9); ui.addstr("Written by Yoran Heling <projects@yorhel.nl>");
+        box.move(9, 11); ui.addstr("Written by Yorhel <projects@yorhel.nl>");
         box.move(10,16); ui.addstr("https://dev.yorhel.nl/ncdu");
     }
 
