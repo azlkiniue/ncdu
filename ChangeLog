@@ -1,3 +1,7 @@
+1.20 - 2024-04-21
+	- Revert default color scheme back to 'off'
+	- Rewrite man page in mdoc, drop pod2man dependency
+
 1.19 - 2023-09-11
 	- Fix typo in --exclude-from argument
 	- Add --(enable|disable)-natsort options
