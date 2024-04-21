@@ -473,7 +473,6 @@ void close_nc(void) {
 
 int main(int argc, char **argv) {
   read_locale();
-  uic_theme = getenv("NO_COLOR") ? 0 : 2;
   config_load(argc, argv);
   argv_parse(argc, argv);
 

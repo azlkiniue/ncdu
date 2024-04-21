@@ -1,6 +1,6 @@
-.\" SPDX-FileCopyrightText: Yoran Heling <projects@yorhel.nl>
+.\" SPDX-FileCopyrightText: Yorhel <projects@yorhel.nl>
 .\" SPDX-License-Identifier: MIT
-.Dd January 21, 2024
+.Dd April 21, 2024
 .Dt NCDU 1
 .Os
 .Sh NAME
@@ -18,7 +18,7 @@
 .Op Fl \-include\-caches , \-exclude\-caches
 .Op Fl L , \-follow\-symlinks , \-no\-follow\-symlinks
 .Op Fl \-include\-kernfs , \-exclude\-kernfs
-.Op Fl \-exclude\-firmlinks, \-follow\-firmlinks
+.Op Fl \-exclude\-firmlinks , \-follow\-firmlinks
 .Op Fl 0 , 1 , 2
 .Op Fl q , \-slow\-ui\-updates , \-fast\-ui\-updates
 .Op Fl \-enable\-shell , \-disable\-shell
@@ -146,7 +146,7 @@ The exact counting behavior of this flag is subject to change in the future.
 .Pp
 The complete list of currently known pseudo filesystems is: binfmt, bpf, cgroup,
 cgroup2, debug, devpts, proc, pstore, security, selinux, sys, trace.
-.Op Fl \-exclude\-firmlinks, \-follow\-firmlinks
+.It Fl \-exclude\-firmlinks , \-follow\-firmlinks
 (MacOS only) Exclude or follow firmlinks.
 .El
 .Ss Interface Options
@@ -276,10 +276,7 @@ for a variation of the
 color scheme that also works in terminals with a light background.
 .Pp
 The default is
-.Ar dark\-bg
-unless the
-.Ev NO_COLOR
-environment variable is set.
+.Ar off .
 .El
 .Sh CONFIGURATION
 .Nm
@@ -452,9 +449,20 @@ the local system without any network latency, and
 .Nm
 does not keep the entire directory structure in memory when exporting, so this
 won't consume much memory on the remote system.
+.Sh SEE ALSO
+.Xr du 1 ,
+.Xr tree 1 .
+.Pp
+.Nm
+has a website:
+.Lk https://dev.yorhel.nl/ncdu
+.Sh AUTHORS
+Written by
+.An Yorhel Aq Mt projects@yorhel.nl
 .Sh BUGS
-Directory hard links are not supported.  They are not detected as being hard
-links, and will thus get scanned and counted multiple times.
+Directory hard links are not supported.
+They are not detected as being hard links, and will thus get scanned and
+counted multiple times.
 .Pp
 Some minor glitches may appear when displaying filenames that contain multibyte
 or multicolumn characters.
@@ -478,13 +486,3 @@ to get stuck in an infinite loop and eventually run out of memory.
 Please report any other bugs you may find at the bug tracker, which can be
 found on the web site at
 .Lk https://dev.yorhel.nl/ncdu
-.Sh SEE ALSO
-.Xr du 1 ,
-.Xr tree 1 .
-.Pp
-.Nm
-has a website:
-.Lk https://dev.yorhel.nl/ncdu
-.Sh AUTHORS
-Written by
-.An Yorhel Aq Mt projects@yorhel.nl

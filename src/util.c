@@ -34,7 +34,7 @@
 #include <locale.h>
 #endif
 
-int uic_theme;
+int uic_theme = 0;
 int winrows, wincols;
 int subwinr, subwinc;
 static char thou_sep;
