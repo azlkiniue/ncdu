@@ -9,7 +9,7 @@ ZIG ?= zig
 PREFIX ?= /usr/local
 BINDIR ?= ${PREFIX}/bin
 MANDIR ?= ${PREFIX}/share/man/man1
-ZIG_FLAGS ?= --release
+ZIG_FLAGS ?= --release=fast
 
 NCDU_VERSION=$(shell grep 'program_version = "' src/main.zig | sed -e 's/^.*"\(.\+\)".*$$/\1/')
 

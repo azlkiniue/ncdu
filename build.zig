@@ -5,9 +5,7 @@ const std = @import("std");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{
-        .preferred_optimize_mode = .ReleaseFast,
-    });
+    const optimize = b.standardOptimizeOption(.{});
 
     const pie = b.option(bool, "pie", "Build with PIE support (by default false)") orelse false;
 
