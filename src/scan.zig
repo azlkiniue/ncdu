@@ -1089,12 +1089,12 @@ pub fn draw() void {
                 line = "\x1b7\x1b[JCounting hardlinks...\x1b8";
             } else if (active_context.parents == null) {
                 line = std.fmt.bufPrint(&buf, "\x1b7\x1b[J{s: <63} {d:>9} files\x1b8",
-                    .{ ui.shorten(active_context.pathZ(), 63), active_context.items_seen }
+                    .{ ui.shorten(ui.toUtf8(active_context.pathZ()), 63), active_context.items_seen }
                 ) catch return;
             } else {
                 const r = ui.FmtSize.fmt(util.blocksToSize(model.root.entry.pack.blocks));
                 line = std.fmt.bufPrint(&buf, "\x1b7\x1b[J{s: <51} {d:>9} files / {s}{s}\x1b8",
-                    .{ ui.shorten(active_context.pathZ(), 51), active_context.items_seen, r.num(), r.unit }
+                    .{ ui.shorten(ui.toUtf8(active_context.pathZ()), 51), active_context.items_seen, r.num(), r.unit }
                 ) catch return;
             }
             const stderr = std.io.getStdErr();
