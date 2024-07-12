@@ -7,3 +7,4 @@ ncurses
 static-*/
 zig-cache/
 zig-out/
+.zig-cache/
