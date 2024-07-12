@@ -479,10 +479,6 @@ fn scanDir(ctx: *Context, pat: *const exclude.Patterns, dir: std.fs.Dir, dir_dev
             ctx.addSpecial(.err);
             continue;
         };
-        if (main.config.same_fs and ctx.stat.dev != dir_dev) {
-            ctx.addSpecial(.other_fs);
-            continue;
-        }
 
         if (main.config.follow_symlinks and ctx.stat.symlink) {
             if (Stat.read(dir, ctx.name, true)) |nstat| {
@@ -494,6 +490,10 @@ fn scanDir(ctx: *Context, pat: *const exclude.Patterns, dir: std.fs.Dir, dir_dev
                         ctx.stat.hlinkc = false;
                 }
             } else |_| {}
+        }
+        if (main.config.same_fs and ctx.stat.dev != dir_dev) {
+            ctx.addSpecial(.other_fs);
+            continue;
         }
         if (excluded) |e| if (e and ctx.stat.dir) {
             ctx.addSpecial(.excluded);
