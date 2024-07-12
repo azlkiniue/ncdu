@@ -43,6 +43,7 @@ pub fn quit() noreturn {
 // Also, init() and other ncurses-related functions may have hidden allocation,
 // no clue if ncurses will consistently report OOM, but we're not handling that
 // right now.
+// TODO: Make thread-safe!
 pub fn oom() void {
     const haveui = inited;
     deinit();

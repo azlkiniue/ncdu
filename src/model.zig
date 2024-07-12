@@ -6,15 +6,6 @@ const main = @import("main.zig");
 const ui = @import("ui.zig");
 const util = @import("util.zig");
 
-// While an arena allocator is optimimal for almost all scenarios in which ncdu
-// is used, it doesn't allow for re-using deleted nodes after doing a delete or
-// refresh operation, so a long-running ncdu session with regular refreshes
-// will leak memory, but I'd say that's worth the efficiency gains.
-// TODO: Can still implement a simple bucketed free list on top of this arena
-// allocator to reuse nodes, if necessary.
-var allocator_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-const allocator = allocator_state.allocator();
-
 pub const EType = enum(u2) { dir, link, file };
 
 // Type for the Entry.Packed.blocks field. Smaller than a u64 to make room for flags.
@@ -43,6 +34,7 @@ pub const Entry = extern struct {
         // Counting of Link entries is deferred until the scan/delete operation has
         // completed, so for those entries this flag indicates an intention to be
         // counted.
+        // TODO: Think we can remove this
         counted: bool = false,
         blocks: Blocks = 0, // 512-byte blocks
     };
@@ -82,7 +74,7 @@ pub const Entry = extern struct {
         return @ptrCast(@as([*]Ext, @ptrCast(self)) - 1);
     }
 
-    fn alloc(comptime T: type, etype: EType, isext: bool, ename: []const u8) *Entry {
+    fn alloc(comptime T: type, allocator: std.mem.Allocator, etype: EType, isext: bool, ename: []const u8) *Entry {
         const size = (if (isext) @as(usize, @sizeOf(Ext)) else 0) + @sizeOf(T) + ename.len + 1;
         var ptr = blk: while (true) {
             if (allocator.allocWithOptions(u8, size, 1, null)) |p| break :blk p
@@ -101,11 +93,11 @@ pub const Entry = extern struct {
         return &e.entry;
     }
 
-    pub fn create(etype: EType, isext: bool, ename: []const u8) *Entry {
+    pub fn create(allocator: std.mem.Allocator, etype: EType, isext: bool, ename: []const u8) *Entry {
         return switch (etype) {
-            .dir  => alloc(Dir, etype, isext, ename),
-            .file => alloc(File, etype, isext, ename),
-            .link => alloc(Link, etype, isext, ename),
+            .dir  => alloc(Dir, allocator, etype, isext, ename),
+            .file => alloc(File, allocator, etype, isext, ename),
+            .link => alloc(Link, allocator, etype, isext, ename),
         };
     }
 
@@ -321,12 +313,15 @@ pub const Ext = extern struct {
 // List of st_dev entries. Those are typically 64bits, but that's quite a waste
 // of space when a typical scan won't cover many unique devices.
 pub const devices = struct {
+    var lock = std.Thread.Mutex{};
     // id -> dev
     pub var list = std.ArrayList(u64).init(main.allocator);
     // dev -> id
     var lookup = std.AutoHashMap(u64, DevId).init(main.allocator);
 
     pub fn getId(dev: u64) DevId {
+        lock.lock();
+        defer lock.unlock();
         const d = lookup.getOrPut(dev) catch unreachable;
         if (!d.found_existing) {
             d.value_ptr.* = @as(DevId, @intCast(list.items.len));
@@ -462,7 +457,9 @@ pub var root: *Dir = undefined;
 
 
 test "entry" {
-    var e = Entry.create(.file, false, "hello");
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var e = Entry.create(arena.allocator(), .file, false, "hello");
     try std.testing.expectEqual(e.pack.etype, .file);
     try std.testing.expect(!e.pack.isext);
     try std.testing.expectEqualStrings(e.name(), "hello");

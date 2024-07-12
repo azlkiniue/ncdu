@@ -848,7 +848,7 @@ pub fn keyInput(ch: i32) void {
                 message = "Directory refresh feature disabled."
             else {
                 main.state = .refresh;
-                scan.setupRefresh(dir_parent);
+                //scan.setupRefresh(dir_parent);
             }
         },
         'b' => {

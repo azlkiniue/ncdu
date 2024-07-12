@@ -6,6 +6,7 @@ pub const program_version = "2.4";
 const std = @import("std");
 const model = @import("model.zig");
 const scan = @import("scan.zig");
+const sink = @import("sink.zig");
 const ui = @import("ui.zig");
 const browser = @import("browser.zig");
 const delete = @import("delete.zig");
@@ -16,6 +17,7 @@ const c = @cImport(@cInclude("locale.h"));
 test "imports" {
     _ = model;
     _ = scan;
+    _ = sink;
     _ = ui;
     _ = browser;
     _ = delete;
@@ -57,6 +59,7 @@ pub const config = struct {
     pub var exclude_caches: bool = false;
     pub var exclude_kernfs: bool = false;
     pub var exclude_patterns: std.ArrayList([:0]const u8) = std.ArrayList([:0]const u8).init(allocator);
+    pub var threads: usize = 1;
 
     pub var update_delay: u64 = 100*std.time.ns_per_ms;
     pub var scan_ui: ?enum { none, line, full } = null;
@@ -456,7 +459,7 @@ pub fn main() void {
         }
     }
 
-    var scan_dir: ?[]const u8 = null;
+    var scan_dir: ?[:0]const u8 = null;
     var import_file: ?[:0]const u8 = null;
     var export_file: ?[:0]const u8 = null;
     var quit_after_scan = false;
@@ -480,10 +483,13 @@ pub fn main() void {
             else if (opt.is("-f")) import_file = allocator.dupeZ(u8, args.arg()) catch unreachable
             else if (opt.is("--ignore-config")) {}
             else if (opt.is("--quit-after-scan")) quit_after_scan = true // undocumented feature to help with benchmarking scan/import
+            else if (opt.is("--experimental-threads")) config.threads = std.fmt.parseInt(u8, args.arg(), 10) catch ui.die("Invalid number of threads.\n", .{})
             else if (argConfig(&args, opt)) {}
             else ui.die("Unrecognized option '{s}'.\n", .{opt.val});
         }
     }
+
+    if (config.threads == 0) config.threads = std.Thread.getCpuCount() catch 1;
 
     if (@import("builtin").os.tag != .linux and config.exclude_kernfs)
         ui.die("The --exclude-kernfs flag is currently only supported on Linux.\n", .{});
@@ -511,11 +517,16 @@ pub fn main() void {
              catch |e| ui.die("Error opening export file: {s}.\n", .{ui.errorString(e)})
     ) else null;
 
-    if (import_file) |f| {
-        scan.importRoot(f, out_file);
+    if (import_file) |_| {
+        //scan.importRoot(f, out_file);
         config.imported = true;
-    } else scan.scanRoot(scan_dir orelse ".", out_file)
-           catch |e| ui.die("Error opening directory: {s}.\n", .{ui.errorString(e)});
+    } else {
+        var buf = [_]u8{0} ** (std.fs.MAX_PATH_BYTES+1);
+        const path =
+            if (std.posix.realpathZ(scan_dir orelse ".", buf[0..buf.len-1])) |p| buf[0..p.len:0]
+            else |_| (scan_dir orelse ".");
+        scan.scan(path) catch |e| ui.die("Error opening directory: {s}.\n", .{ui.errorString(e)});
+    }
     if (quit_after_scan or out_file != null) return;
 
     config.can_shell = config.can_shell orelse !config.imported;
@@ -531,7 +542,7 @@ pub fn main() void {
     while (true) {
         switch (state) {
             .refresh => {
-                scan.scan();
+                //scan.scan();
                 state = .browse;
                 browser.loadDir(null);
             },
@@ -557,7 +568,7 @@ pub fn handleEvent(block: bool, force_draw: bool) void {
     if (block or force_draw or event_delay_timer.read() > config.update_delay) {
         if (ui.inited) _ = ui.c.erase();
         switch (state) {
-            .scan, .refresh => scan.draw(),
+            .scan, .refresh => sink.draw(),
             .browse => browser.draw(),
             .delete => delete.draw(),
             .shell => unreachable,
@@ -576,7 +587,7 @@ pub fn handleEvent(block: bool, force_draw: bool) void {
         if (ch == 0) return;
         if (ch == -1) return handleEvent(firstblock, true);
         switch (state) {
-            .scan, .refresh => scan.keyInput(ch),
+            .scan, .refresh => sink.keyInput(ch),
             .browse => browser.keyInput(ch),
             .delete => delete.keyInput(ch),
             .shell => unreachable,
