@@ -515,6 +515,7 @@ fn scanDir(ctx: *Context, pat: *const exclude.Patterns, dir: std.fs.Dir, dir_dev
 
         if (main.config.exclude_caches and ctx.stat.dir) {
             if (edir.?.openFileZ("CACHEDIR.TAG", .{})) |f| {
+                defer f.close();
                 const sig = "Signature: 8a477f597d28d172789f06886806bc55";
                 var buf: [sig.len]u8 = undefined;
                 if (f.reader().readAll(&buf)) |len| {
