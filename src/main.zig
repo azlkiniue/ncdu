@@ -498,7 +498,7 @@ pub fn main() void {
             else config.scan_ui = .line;
         } else config.scan_ui = .full;
     }
-    if (!in_tty and import_file == null and export_file == null)
+    if (!in_tty and import_file == null and export_file == null and !quit_after_scan)
         ui.die("Standard input is not a TTY. Did you mean to import a file using '-f -'?\n", .{});
     config.nc_tty = !in_tty or (if (export_file) |f| std.mem.eql(u8, f, "-") else false);
 
