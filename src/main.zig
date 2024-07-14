@@ -542,7 +542,14 @@ pub fn main() void {
     while (true) {
         switch (state) {
             .refresh => {
-                //scan.scan();
+                var full_path = std.ArrayList(u8).init(allocator);
+                defer full_path.deinit();
+                sink.state.out.mem.?.fmtPath(true, &full_path);
+                scan.scan(util.arrayListBufZ(&full_path)) catch {
+                    sink.state.last_error = allocator.dupeZ(u8, full_path.items) catch unreachable;
+                    sink.state.status = .err;
+                    while (state == .refresh) handleEvent(true, true);
+                };
                 state = .browse;
                 browser.loadDir(null);
             },

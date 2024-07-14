@@ -62,7 +62,7 @@ fn deleteItem(dir: std.fs.Dir, path: [:0]const u8, ptr: *align(1) ?*model.Entry)
             return if (e != error.DirNotEmpty or d.sub == null) err(e) else false;
     } else
         dir.deleteFileZ(path) catch |e| return err(e);
-    ptr.*.?.delStats(parent);
+    ptr.*.?.zeroStats(parent);
     ptr.* = ptr.*.?.next;
     return false;
 }

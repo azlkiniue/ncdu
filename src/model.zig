@@ -9,7 +9,7 @@ const util = @import("util.zig");
 pub const EType = enum(u2) { dir, link, file };
 
 // Type for the Entry.Packed.blocks field. Smaller than a u64 to make room for flags.
-pub const Blocks = u60;
+pub const Blocks = u61;
 
 // Memory layout:
 //      (Ext +) Dir + name
@@ -30,12 +30,6 @@ pub const Entry = extern struct {
     pub const Packed = packed struct(u64) {
         etype: EType,
         isext: bool,
-        // Whether or not this entry's size has been counted in its parents.
-        // Counting of Link entries is deferred until the scan/delete operation has
-        // completed, so for those entries this flag indicates an intention to be
-        // counted.
-        // TODO: Think we can remove this
-        counted: bool = false,
         blocks: Blocks = 0, // 512-byte blocks
     };
 
@@ -108,100 +102,33 @@ pub const Entry = extern struct {
             else false;
     }
 
-    pub fn addStats(self: *Entry, parent: *Dir, nlink: u31) void {
-        if (self.pack.counted) return;
-        self.pack.counted = true;
-
-        // Add link to the inode map, but don't count its size (yet).
-        if (self.link()) |l| {
-            l.parent = parent;
-            var d = inodes.map.getOrPut(l) catch unreachable;
-            if (!d.found_existing) {
-                d.value_ptr.* = .{ .counted = false, .nlink = nlink };
-                inodes.total_blocks +|= self.pack.blocks;
-                l.next = l;
-            } else {
-                inodes.setStats(.{ .key_ptr = d.key_ptr, .value_ptr = d.value_ptr }, false);
-                // If the nlink counts are not consistent, reset to 0 so we calculate with what we have instead.
-                if (d.value_ptr.nlink != nlink)
-                    d.value_ptr.nlink = 0;
-                l.next = d.key_ptr.*.next;
-                d.key_ptr.*.next = l;
-            }
-            inodes.addUncounted(l);
-        }
-
-        var it: ?*Dir = parent;
-        while(it) |p| : (it = p.parent) {
-            if (self.ext()) |e|
-                if (p.entry.ext()) |pe|
-                    if (e.mtime > pe.mtime) { pe.mtime = e.mtime; };
-            p.items +|= 1;
-            if (self.pack.etype != .link) {
-                p.entry.size +|= self.size;
-                p.entry.pack.blocks +|= self.pack.blocks;
-            }
-        }
-    }
-
-    // Opposite of addStats(), but has some limitations:
-    // - If addStats() saturated adding sizes, then the sizes after delStats()
-    //   will be incorrect.
-    // - mtime of parents is not adjusted (but that's a feature, possibly?)
-    //
-    // This function assumes that, for directories, all sub-entries have
-    // already been un-counted.
-    //
-    // When removing a Link, the entry's nlink counter is reset to zero, so
-    // that it will be recalculated based on our view of the tree. This means
-    // that links outside of the scanned directory will not be considered
-    // anymore, meaning that delStats() followed by addStats() with the same
-    // data may cause information to be lost.
-    pub fn delStats(self: *Entry, parent: *Dir) void {
-        if (!self.pack.counted) return;
-        defer self.pack.counted = false; // defer, to make sure inodes.setStats() still sees it as counted.
-
-        if (self.link()) |l| {
-            var d = inodes.map.getEntry(l).?;
-            inodes.setStats(d, false);
-            d.value_ptr.nlink = 0;
-            if (l.next == l) {
-                _ = inodes.map.remove(l);
-                _ = inodes.uncounted.remove(l);
-                inodes.total_blocks -|= self.pack.blocks;
-            } else {
-                if (d.key_ptr.* == l)
-                    d.key_ptr.* = l.next;
-                inodes.addUncounted(l.next);
-                // This is O(n), which in this context has the potential to
-                // slow ncdu down to a crawl. But this function is only called
-                // on refresh/delete operations and even then it's not common
-                // to have very long lists, so this blowing up should be very
-                // rare. This removal can also be deferred to setStats() to
-                // amortize the costs, if necessary.
-                var it = l.next;
-                while (it.next != l) it = it.next;
-                it.next = l.next;
-            }
-        }
-
-        var it: ?*Dir = parent;
-        while(it) |p| : (it = p.parent) {
-            p.items -|= 1;
-            if (self.pack.etype != .link) {
-                p.entry.size -|= self.size;
-                p.entry.pack.blocks -|= self.pack.blocks;
-            }
-        }
-    }
-
-    pub fn delStatsRec(self: *Entry, parent: *Dir) void {
+    fn zeroStatsRec(self: *Entry) void {
+        self.pack.blocks = 0;
+        self.size = 0;
+        if (self.file()) |f| f.pack = .{};
         if (self.dir()) |d| {
+            d.items = 0;
+            d.pack.err = false;
+            d.pack.suberr = false;
             var it = d.sub;
-            while (it) |e| : (it = e.next)
-                e.delStatsRec(d);
+            while (it) |e| : (it = e.next) zeroStatsRec(e);
         }
-        self.delStats(parent);
+    }
+
+    // Recursively set stats and those of sub-items to zero and removes counts
+    // from parent directories; as if this item does not exist in the tree.
+    // XXX: Does not update the 'suberr' flag of parent directories, make sure
+    // to call updateSubErr() afterwards.
+    pub fn zeroStats(self: *Entry, parent: ?*Dir) void {
+        // TODO: Uncount nested links.
+
+        var it = parent;
+        while (it) |p| : (it = p.parent) {
+            p.entry.pack.blocks -|= self.pack.blocks;
+            p.entry.size -|= self.size;
+            p.items -|= 1 + (if (self.dir()) |d| d.items else 0);
+        }
+        self.zeroStatsRec();
     }
 };
 
@@ -341,11 +268,6 @@ pub const inodes = struct {
     const Map = std.HashMap(*Link, Inode, HashContext, 80);
     pub var map = Map.init(main.allocator);
 
-    // Cumulative size of all unique hard links in the map.  This is a somewhat
-    // ugly workaround to provide accurate sizes during the initial scan, when
-    // the hard links are not counted as part of the parent directories yet.
-    pub var total_blocks: Blocks = 0;
-
     // List of nodes in 'map' with !counted, to speed up addAllStats().
     // If this list grows large relative to the number of nodes in 'map', then
     // this list is cleared and uncounted_full is set instead, so that
@@ -399,14 +321,12 @@ pub const inodes = struct {
         defer dirs.deinit();
         var it = entry.key_ptr.*;
         while (true) {
-            if (it.entry.pack.counted) {
-                nlink += 1;
-                var parent: ?*Dir = it.parent;
-                while (parent) |p| : (parent = p.parent) {
-                    const de = dirs.getOrPut(p) catch unreachable;
-                    if (de.found_existing) de.value_ptr.* += 1
-                    else de.value_ptr.* = 1;
-                }
+            nlink += 1;
+            var parent: ?*Dir = it.parent;
+            while (parent) |p| : (parent = p.parent) {
+                const de = dirs.getOrPut(p) catch unreachable;
+                if (de.found_existing) de.value_ptr.* += 1
+                else de.value_ptr.* = 1;
             }
             it = it.next;
             if (it == entry.key_ptr.*)

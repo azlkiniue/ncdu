@@ -282,12 +282,11 @@ const Thread = struct {
 
 
 pub fn scan(path: [:0]const u8) !void {
+    const sink_threads = sink.createThreads(main.config.threads);
+    defer sink.done();
+
     const stat = try statAt(std.fs.cwd(), path, true);
     const fd = try std.fs.cwd().openDirZ(path, .{ .iterate = true });
-
-    sink.state.threads = main.allocator.alloc(sink.Thread, main.config.threads) catch unreachable;
-    for (sink.state.threads) |*t| t.* = .{};
-    defer main.allocator.free(sink.state.threads);
 
     var state = State{
         .threads = main.allocator.alloc(Thread, main.config.threads) catch unreachable,
@@ -298,7 +297,7 @@ pub fn scan(path: [:0]const u8) !void {
     const dir = Dir.create(fd, stat.dev, exclude.getPatterns(path), root);
     _ = state.tryPush(dir);
 
-    for (sink.state.threads, state.threads, 0..) |*s, *t, n|
+    for (sink_threads, state.threads, 0..) |*s, *t, n|
         t.* = .{ .sink = s, .state = &state, .thread_num = n };
 
     // XXX: Continue with fewer threads on error?

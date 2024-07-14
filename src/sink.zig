@@ -220,6 +220,14 @@ pub const Dir = struct {
         switch (d.out) {
             .mem => |*m| m.addSpecial(t.arena.allocator(), name, sp),
         }
+        if (sp == .err) {
+            state.last_error_lock.lock();
+            defer state.last_error_lock.unlock();
+            if (state.last_error) |p| main.allocator.free(p);
+            const p = d.path();
+            state.last_error = std.fs.path.joinZ(main.allocator, &.{ p, name }) catch unreachable;
+            main.allocator.free(p);
+        }
     }
 
     pub fn addStat(d: *Dir, t: *Thread, name: []const u8, stat: *const Stat) void {
@@ -255,7 +263,7 @@ pub const Dir = struct {
         }
     }
 
-    fn path(d: *Dir) []const u8 {
+    fn path(d: *Dir) [:0]const u8 {
         var components = std.ArrayList([]const u8).init(main.allocator);
         defer components.deinit();
         var it: ?*Dir = d;
@@ -269,7 +277,7 @@ pub const Dir = struct {
             if (i == 0) break;
             i -= 1;
         }
-        return out.toOwnedSlice() catch unreachable;
+        return out.toOwnedSliceSentinel(0) catch unreachable;
     }
 
     fn ref(d: *Dir) void {
@@ -308,47 +316,263 @@ pub const Thread = struct {
 
 
 pub const state = struct {
+    pub var status: enum { done, err, zeroing, hlcnt, running } = .running;
     pub var threads: []Thread = undefined;
+    pub var out: Out = .{ .mem = null };
+
+    pub var last_error: ?[:0]u8 = null;
+    var last_error_lock = std.Thread.Mutex{};
+    var need_confirm_quit = false;
+
+    pub const Out = union(enum) {
+        mem: ?*model.Dir,
+    };
 };
 
 
+// Must be the first thing to call from a source; initializes global state.
+pub fn createThreads(num: usize) []Thread {
+    state.status = .running;
+    if (state.last_error) |p| main.allocator.free(p);
+    state.last_error = null;
+    state.threads = main.allocator.alloc(Thread, num) catch unreachable;
+    for (state.threads) |*t| t.* = .{};
+    return state.threads;
+}
+
+
+// Must be the last thing to call from a source.
+pub fn done() void {
+    // TODO: Do hardlink stuff.
+    state.status = .done;
+    main.allocator.free(state.threads);
+    // Clear the screen when done.
+    if (main.config.scan_ui == .line) main.handleEvent(false, true);
+}
+
+
 pub fn createRoot(path: []const u8, stat: *const Stat) *Dir {
-    // TODO: Handle other outputs
-    model.root = model.Entry.create(main.allocator, .dir, main.config.extended, path).dir().?;
-    model.root.entry.pack.blocks = stat.blocks;
-    model.root.entry.size = stat.size;
-    model.root.pack.dev = model.devices.getId(stat.dev);
+    const out = switch (state.out) {
+        .mem => |parent| sw: {
+            const p = parent orelse blk: {
+                model.root = model.Entry.create(main.allocator, .dir, main.config.extended, path).dir().?;
+                break :blk model.root;
+            };
+            state.status = .zeroing;
+            if (p.items > 10_000) main.handleEvent(false, true);
+            // Do the zeroStats() here, after the "root" entry has been
+            // stat'ed and opened, so that a fatal error on refresh won't
+            // zero-out the requested directory.
+            p.entry.zeroStats(p.parent);
+            state.status = .running;
+            p.entry.pack.blocks = stat.blocks;
+            p.entry.size = stat.size;
+            p.pack.dev = model.devices.getId(stat.dev);
+            break :sw .{ .mem = MemDir.init(p) };
+        },
+    };
 
     const d = main.allocator.create(Dir) catch unreachable;
     d.* = .{
         .name = main.allocator.dupe(u8, path) catch unreachable,
         .parent = null,
-        .out = .{ .mem = MemDir.init(model.root) },
+        .out = out,
     };
     return d;
 }
 
 
-pub fn draw() void {
+fn drawConsole() void {
+    const st = struct {
+        var ansi: ?bool = null;
+        var lines_written: usize = 0;
+    };
+    const stderr = std.io.getStdErr();
+    const ansi = st.ansi orelse blk: {
+        const t = stderr.supportsAnsiEscapeCodes();
+        st.ansi = t;
+        break :blk t;
+    };
+
+    var buf: [4096]u8 = undefined;
+    var strm = std.io.fixedBufferStream(buf[0..]);
+    var wr = strm.writer();
+    while (ansi and st.lines_written > 0) {
+        wr.writeAll("\x1b[1F\x1b[2K") catch {};
+        st.lines_written -= 1;
+    }
+
+    if (state.status == .running) {
+        var bytes: u64 = 0;
+        var files: u64 = 0;
+        for (state.threads) |*t| {
+            bytes +|= t.bytes_seen.load(.monotonic);
+            files += t.files_seen.load(.monotonic);
+        }
+        const r = ui.FmtSize.fmt(bytes);
+        wr.print("{} files / {s}{s}\n", .{files, r.num(), r.unit}) catch {};
+        st.lines_written += 1;
+
+        for (state.threads, 0..) |*t, i| {
+            const dir = blk: {
+                t.lock.lock();
+                defer t.lock.unlock();
+                break :blk if (t.current_dir) |d| d.path() else null;
+            };
+            wr.print("  #{}: {s}\n", .{i+1, ui.shorten(ui.toUtf8(dir orelse "(waiting)"), 73)}) catch {};
+            st.lines_written += 1;
+            if (dir) |p| main.allocator.free(p);
+        }
+    }
+
+    stderr.writeAll(strm.getWritten()) catch {};
+}
+
+
+fn drawProgress() void {
+    const st = struct { var animation_pos: usize = 0; };
+
     var bytes: u64 = 0;
     var files: u64 = 0;
     for (state.threads) |*t| {
         bytes +|= t.bytes_seen.load(.monotonic);
         files += t.files_seen.load(.monotonic);
     }
-    const r = ui.FmtSize.fmt(bytes);
-    std.debug.print("{} files / {s}{s}\n", .{files, r.num(), r.unit});
 
-    for (state.threads, 0..) |*t, i| {
+    ui.init();
+    const width = ui.cols -| 5;
+    const numthreads: u32 = @intCast(@min(state.threads.len, @max(1, ui.rows -| 10)));
+    const box = ui.Box.create(8 + numthreads, width, "Scanning...");
+    box.move(2, 2);
+    ui.addstr("Total items: ");
+    ui.addnum(.default, files);
+
+    if (width > 48) {
+        box.move(2, 30);
+        ui.addstr("size: ");
+        ui.addsize(.default, bytes);
+    }
+
+    for (0..numthreads) |i| {
+        box.move(3+@as(u32, @intCast(i)), 4);
         const dir = blk: {
+            const t = &state.threads[i];
             t.lock.lock();
             defer t.lock.unlock();
             break :blk if (t.current_dir) |d| d.path() else null;
         };
-        std.debug.print("  #{}: {s}\n", .{i, dir orelse "(waiting)"});
+        ui.addstr(ui.shorten(ui.toUtf8(dir orelse "(waiting)"), width -| 6));
         if (dir) |p| main.allocator.free(p);
+    }
+
+    blk: {
+        state.last_error_lock.lock();
+        defer state.last_error_lock.unlock();
+        const err = state.last_error orelse break :blk;
+        box.move(4 + numthreads, 2);
+        ui.style(.bold);
+        ui.addstr("Warning: ");
+        ui.style(.default);
+        ui.addstr("error scanning ");
+        ui.addstr(ui.shorten(ui.toUtf8(err), width -| 28));
+        box.move(5 + numthreads, 3);
+        ui.addstr("some directory sizes may not be correct.");
+    }
+
+    if (state.need_confirm_quit) {
+        box.move(6 + numthreads, width -| 20);
+        ui.addstr("Press ");
+        ui.style(.key);
+        ui.addch('y');
+        ui.style(.default);
+        ui.addstr(" to confirm");
+    } else {
+        box.move(6 + numthreads, width -| 18);
+        ui.addstr("Press ");
+        ui.style(.key);
+        ui.addch('q');
+        ui.style(.default);
+        ui.addstr(" to abort");
+    }
+
+    if (main.config.update_delay < std.time.ns_per_s and width > 40) {
+        const txt = "Scanning...";
+        st.animation_pos += 1;
+        if (st.animation_pos >= txt.len*2) st.animation_pos = 0;
+        if (st.animation_pos < txt.len) {
+            box.move(6 + numthreads, 2);
+            for (txt[0..st.animation_pos + 1]) |t| ui.addch(t);
+        } else {
+            var i: u32 = txt.len-1;
+            while (i > st.animation_pos-txt.len) : (i -= 1) {
+                box.move(6 + numthreads, 2+i);
+                ui.addch(txt[i]);
+            }
+        }
     }
 }
 
-pub fn keyInput(_: i32) void {
+
+fn drawError() void {
+    const width = ui.cols -| 5;
+    const box = ui.Box.create(6, width, "Scan error");
+
+    box.move(2, 2);
+    ui.addstr("Unable to open directory:");
+    box.move(3, 4);
+    ui.addstr(ui.shorten(ui.toUtf8(state.last_error.?), width -| 10));
+
+    box.move(4, width -| 27);
+    ui.addstr("Press any key to continue");
+}
+
+
+fn drawMessage(msg: []const u8) void {
+    const width = ui.cols -| 5;
+    const box = ui.Box.create(4, width, "Scan error");
+    box.move(2, 2);
+    ui.addstr(msg);
+}
+
+
+pub fn draw() void {
+    switch (main.config.scan_ui.?) {
+        .none => {},
+        .line => drawConsole(),
+        .full => switch (state.status) {
+            .done => {},
+            .err => drawError(),
+            .zeroing => {
+                const box = ui.Box.create(4, ui.cols -| 5, "Initializing");
+                box.move(2, 2);
+                ui.addstr("Clearing directory counts...");
+            },
+            .hlcnt => {
+                const box = ui.Box.create(4, ui.cols -| 5, "Finalizing");
+                box.move(2, 2);
+                ui.addstr("Counting hardlinks...");
+            },
+            .running => drawProgress(),
+        },
+    }
+}
+
+
+pub fn keyInput(ch: i32) void {
+    switch (state.status) {
+        .done => {},
+        .err => main.state = .browse,
+        .zeroing => {},
+        .hlcnt => {},
+        .running => {
+            switch (ch) {
+                'q' => {
+                    if (main.config.confirm_quit) state.need_confirm_quit = !state.need_confirm_quit
+                   else ui.quit();
+                },
+                'y', 'Y' => if (state.need_confirm_quit) ui.quit(),
+                else => state.need_confirm_quit = false,
+            }
+        },
+    }
 }
