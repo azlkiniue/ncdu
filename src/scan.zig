@@ -234,7 +234,7 @@ const ScanDir = struct {
         if (self.entries.count() > 0) {
             var it = &self.dir.sub;
             while (it.*) |e| {
-                if (self.entries.contains(e)) {
+                if (self.entries.getKey(e) == e) {
                     e.delStatsRec(self.dir);
                     it.* = e.next;
                 } else
