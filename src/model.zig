@@ -102,6 +102,14 @@ pub const Entry = extern struct {
             else false;
     }
 
+    fn removeLinks(self: *Entry) void {
+        if (self.dir()) |d| {
+            var it = d.sub;
+            while (it) |e| : (it = e.next) e.removeLinks();
+        }
+        if (self.link()) |l| l.removeLink();
+    }
+
     fn zeroStatsRec(self: *Entry) void {
         self.pack.blocks = 0;
         self.size = 0;
@@ -111,7 +119,7 @@ pub const Entry = extern struct {
             d.pack.err = false;
             d.pack.suberr = false;
             var it = d.sub;
-            while (it) |e| : (it = e.next) zeroStatsRec(e);
+            while (it) |e| : (it = e.next) e.zeroStatsRec();
         }
     }
 
@@ -120,7 +128,7 @@ pub const Entry = extern struct {
     // XXX: Does not update the 'suberr' flag of parent directories, make sure
     // to call updateSubErr() afterwards.
     pub fn zeroStats(self: *Entry, parent: ?*Dir) void {
-        // TODO: Uncount nested links.
+        self.removeLinks();
 
         var it = parent;
         while (it) |p| : (it = p.parent) {
@@ -198,7 +206,8 @@ pub const Dir = extern struct {
 pub const Link = extern struct {
     entry: Entry,
     parent: *Dir align(1) = undefined,
-    next: *Link align(1) = undefined, // Singly circular linked list of all *Link nodes with the same dev,ino.
+    next: *Link align(1) = undefined, // circular linked list of all *Link nodes with the same dev,ino.
+    prev: *Link align(1) = undefined,
     // dev is inherited from the parent Dir
     ino: u64 align(1) = undefined,
     name: [0]u8 = undefined,
@@ -210,6 +219,49 @@ pub const Link = extern struct {
         out.append('/') catch unreachable;
         out.appendSlice(self.entry.name()) catch unreachable;
         return out.toOwnedSliceSentinel(0) catch unreachable;
+    }
+
+    // Add this link to the inodes map and mark it as 'uncounted'.
+    pub fn addLink(l: *@This(), nlink: u31) void {
+        var d = inodes.map.getOrPut(l) catch unreachable;
+        if (!d.found_existing) {
+            d.value_ptr.* = .{ .counted = false, .nlink = nlink };
+            l.next = l;
+            l.prev = l;
+        } else {
+            inodes.setStats(.{ .key_ptr = d.key_ptr, .value_ptr = d.value_ptr }, false);
+            // If the nlink counts are not consistent, reset to 0 so we calculate with what we have instead.
+            if (d.value_ptr.nlink != nlink)
+                d.value_ptr.nlink = 0;
+            l.next = d.key_ptr.*;
+            l.prev = d.key_ptr.*.prev;
+            l.next.prev = l;
+            l.prev.next = l;
+        }
+        inodes.addUncounted(l);
+    }
+
+    // Remove this link from the inodes map and remove its stats from parent directories.
+    fn removeLink(l: *@This()) void {
+        const entry = inodes.map.getEntry(l) orelse return;
+        inodes.setStats(entry, false);
+        if (l.next == l) {
+            _ = inodes.map.remove(l);
+            _ = inodes.uncounted.remove(l);
+        } else {
+            // XXX: If this link is actually removed from the filesystem, then
+            // the nlink count of the existing links should be updated to
+            // reflect that. But we can't do that here, because this function
+            // is also called before doing a filesystem refresh - in which case
+            // the nlink count likely won't change. Best we can hope for is
+            // that a refresh will encounter another link to the same inode and
+            // trigger an nlink change.
+            if (entry.key_ptr.* == l)
+                entry.key_ptr.* = l.next;
+            inodes.addUncounted(l.next);
+            l.next.prev = l.prev;
+            l.prev.next = l.next;
+        }
     }
 };
 
@@ -274,6 +326,8 @@ pub const inodes = struct {
     // addAllStats() will do a full iteration over 'map'.
     var uncounted = std.HashMap(*Link, void, HashContext, 80).init(main.allocator);
     var uncounted_full = true; // start with true for the initial scan
+
+    pub var lock = std.Thread.Mutex{};
 
     const Inode = packed struct {
         // Whether this Inode is counted towards the parent directories.

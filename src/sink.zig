@@ -131,6 +131,7 @@ const MemDir = struct {
 
     fn addSpecial(self: *MemDir, alloc: std.mem.Allocator, name: []const u8, t: Special) void {
         self.dir.items += 1;
+        if (t == .err) self.dir.pack.suberr = true;
 
         const e = self.getEntry(alloc, .file, false, name);
         e.file().?.pack = switch (t) {
@@ -159,7 +160,13 @@ const MemDir = struct {
             d.pack.dev = model.devices.getId(stat.dev);
         }
         if (e.file()) |f| f.pack = .{ .notreg = !stat.dir and !stat.reg };
-        if (e.link()) |l| l.ino = stat.ino; // TODO: Add to inodes table
+        if (e.link()) |l| {
+            l.parent = self.dir;
+            l.ino = stat.ino;
+            model.inodes.lock.lock();
+            defer model.inodes.lock.unlock();
+            l.addLink(stat.nlink);
+        }
         if (e.ext()) |ext| ext.* = stat.ext;
         return e;
     }
@@ -173,7 +180,7 @@ const MemDir = struct {
         if (self.entries.count() > 0) {
             var it = &self.dir.sub;
             while (it.*) |e| {
-                if (self.entries.contains(e)) it.* = e.next
+                if (self.entries.getKey(e) == e) it.* = e.next
                 else it = &e.next;
             }
         }
@@ -197,7 +204,7 @@ const MemDir = struct {
             if (self.dir.entry.ext()) |e| {
                 if (e.mtime > p.mtime) e.mtime = p.mtime;
             }
-            if (self.suberr or self.dir.pack.err) p.suberr = true;
+            if (self.suberr or self.dir.pack.suberr or self.dir.pack.err) p.suberr = true;
         }
         self.entries.deinit();
     }
@@ -343,7 +350,21 @@ pub fn createThreads(num: usize) []Thread {
 
 // Must be the last thing to call from a source.
 pub fn done() void {
-    // TODO: Do hardlink stuff.
+    if (state.out == .mem) {
+        state.status = .hlcnt;
+        main.handleEvent(false, true);
+        model.inodes.addAllStats();
+        const dir = state.out.mem orelse model.root;
+        var it: ?*model.Dir = dir;
+        while (it) |p| : (it = p.parent) {
+            p.updateSubErr();
+            if (p != dir) {
+                p.entry.pack.blocks +|= dir.entry.pack.blocks;
+                p.entry.size +|= dir.entry.size;
+                p.items +|= dir.items + 1;
+            }
+        }
+    }
     state.status = .done;
     main.allocator.free(state.threads);
     // Clear the screen when done.
