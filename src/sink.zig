@@ -148,6 +148,9 @@ const MemDir = struct {
             self.dir.entry.pack.blocks +|= stat.blocks;
             self.dir.entry.size +|= stat.size;
         }
+        if (self.dir.entry.ext()) |e| {
+            if (stat.ext.mtime > e.mtime) e.mtime = stat.ext.mtime;
+        }
 
         const etype = if (stat.dir) model.EType.dir
                       else if (stat.hlinkc) model.EType.link
@@ -191,7 +194,7 @@ const MemDir = struct {
         self.dir.items +|= self.items;
         if (self.suberr) self.dir.pack.suberr = true;
         if (self.dir.entry.ext()) |e| {
-            if (self.mtime > e.mtime) self.mtime = e.mtime;
+            if (self.mtime > e.mtime) e.mtime = self.mtime;
         }
 
         // Add own counts to parent
@@ -202,7 +205,7 @@ const MemDir = struct {
             p.bytes +|= self.dir.entry.size - self.own_bytes;
             p.items +|= self.dir.items;
             if (self.dir.entry.ext()) |e| {
-                if (e.mtime > p.mtime) e.mtime = p.mtime;
+                if (e.mtime > p.mtime) p.mtime = e.mtime;
             }
             if (self.suberr or self.dir.pack.suberr or self.dir.pack.err) p.suberr = true;
         }
@@ -353,7 +356,6 @@ pub fn done() void {
     if (state.out == .mem) {
         state.status = .hlcnt;
         main.handleEvent(false, true);
-        model.inodes.addAllStats();
         const dir = state.out.mem orelse model.root;
         var it: ?*model.Dir = dir;
         while (it) |p| : (it = p.parent) {
@@ -364,6 +366,7 @@ pub fn done() void {
                 p.items +|= dir.items + 1;
             }
         }
+        model.inodes.addAllStats();
     }
     state.status = .done;
     main.allocator.free(state.threads);
@@ -423,7 +426,10 @@ fn drawConsole() void {
         st.lines_written -= 1;
     }
 
-    if (state.status == .running) {
+    if (state.status == .hlcnt) {
+        wr.writeAll("Counting hardlinks...\n") catch {};
+
+    } else if (state.status == .running) {
         var bytes: u64 = 0;
         var files: u64 = 0;
         for (state.threads) |*t| {
