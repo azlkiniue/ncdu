@@ -6,6 +6,7 @@ pub const program_version = "2.4";
 const std = @import("std");
 const model = @import("model.zig");
 const scan = @import("scan.zig");
+const json_import = @import("json_import.zig");
 const sink = @import("sink.zig");
 const ui = @import("ui.zig");
 const browser = @import("browser.zig");
@@ -17,6 +18,7 @@ const c = @cImport(@cInclude("locale.h"));
 test "imports" {
     _ = model;
     _ = scan;
+    _ = json_import;
     _ = sink;
     _ = ui;
     _ = browser;
@@ -517,8 +519,8 @@ pub fn main() void {
              catch |e| ui.die("Error opening export file: {s}.\n", .{ui.errorString(e)})
     ) else null;
 
-    if (import_file) |_| {
-        //scan.importRoot(f, out_file);
+    if (import_file) |f| {
+        json_import.import(f);
         config.imported = true;
     } else {
         var buf = [_]u8{0} ** (std.fs.MAX_PATH_BYTES+1);

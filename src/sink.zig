@@ -271,9 +271,13 @@ pub const Dir = struct {
         switch (d.out) {
             .mem => |*m| m.setReadError(),
         }
+        state.last_error_lock.lock();
+        defer state.last_error_lock.unlock();
+        if (state.last_error) |p| main.allocator.free(p);
+        state.last_error = d.path();
     }
 
-    fn path(d: *Dir) [:0]const u8 {
+    fn path(d: *Dir) [:0]u8 {
         var components = std.ArrayList([]const u8).init(main.allocator);
         defer components.deinit();
         var it: ?*Dir = d;

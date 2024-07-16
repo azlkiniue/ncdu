@@ -281,7 +281,7 @@ const Row = struct {
         if (!main.config.show_mtime or self.col + 37 > ui.cols) return;
         defer self.col += 27;
         ui.move(self.row, self.col+1);
-        const ext = (if (self.item) |e| e.ext() else @as(?*model.Ext, null)) orelse dir_parent.entry.ext();
+        const ext = if (self.item) |e| e.ext() else dir_parent.entry.ext();
         if (ext) |e| ui.addts(self.bg, e.mtime)
         else ui.addstr("                 no mtime");
     }

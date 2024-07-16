@@ -1,0 +1,476 @@
+// SPDX-FileCopyrightText: Yorhel <projects@yorhel.nl>
+// SPDX-License-Identifier: MIT
+
+const std = @import("std");
+const main = @import("main.zig");
+const util = @import("util.zig");
+const model = @import("model.zig");
+const sink = @import("sink.zig");
+const ui = @import("ui.zig");
+
+
+// Using a custom JSON parser here because, while std.json is great, it does
+// perform strict UTF-8 validation. Which is correct, of course, but ncdu dumps
+// are not always correct JSON as they may contain non-UTF-8 paths encoded as
+// strings.
+
+const Parser = struct {
+    rd: std.fs.File,
+    rdoff: usize = 0,
+    rdsize: usize = 0,
+    byte: u64 = 1,
+    line: u64 = 1,
+    buf: [16*1024]u8 = undefined,
+
+    fn die(p: *Parser, str: []const u8) noreturn {
+        ui.die("Error importing file on line {}:{}: {s}.\n", .{ p.line, p.byte, str });
+    }
+
+    // Feed back a byte that has just been returned by nextByte()
+    fn undoNextByte(p: *Parser, b: u8) void {
+        p.byte -= 1;
+        p.rdoff -= 1;
+        p.buf[p.rdoff] = b;
+    }
+
+    fn fill(p: *Parser) void {
+        @setCold(true);
+        p.rdoff = 0;
+        p.rdsize = p.rd.read(&p.buf) catch |e| switch (e) {
+            error.IsDir => p.die("not a file"), // should be detected at open() time, but no flag for that...
+            error.SystemResources => p.die("out of memory"),
+            else => p.die("I/O error"),
+        };
+    }
+
+    // Returns 0 on EOF.
+    // (or if the file contains a 0 byte, but that's invalid anyway)
+    // (Returning a '?u8' here is nicer but kills performance by about +30%)
+    fn nextByte(p: *Parser) u8 {
+        if (p.rdoff == p.rdsize) {
+            p.fill();
+            if (p.rdsize == 0) return 0;
+        }
+        p.byte += 1;
+        defer p.rdoff += 1;
+        return (&p.buf)[p.rdoff];
+    }
+
+    // next non-whitespace byte
+    fn nextChr(p: *Parser) u8 {
+        while (true) switch (p.nextByte()) {
+            '\n' => {
+                p.line += 1;
+                p.byte = 1;
+            },
+            ' ', '\t', '\r' => {},
+            else => |b| return b,
+        };
+    }
+
+    fn expectLit(p: *Parser, lit: []const u8) void {
+        for (lit) |b| if (b != p.nextByte()) p.die("invalid JSON");
+    }
+
+    fn hexdig(p: *Parser) u16 {
+        const b = p.nextByte();
+        return switch (b) {
+            '0'...'9' => b - '0',
+            'a'...'f' => b - 'a' + 10,
+            'A'...'F' => b - 'A' + 10,
+            else => p.die("invalid hex digit"),
+        };
+    }
+
+    // Read a string (after the ") into buf.
+    // Any characters beyond the size of the buffer are consumed but otherwise discarded.
+    fn stringContent(p: *Parser, buf: []u8) []u8 {
+        var n: usize = 0;
+        while (true) switch (p.nextByte()) {
+            '"' => break,
+            '\\' => switch (p.nextByte()) {
+                '"' => if (n < buf.len) { buf[n] = '"'; n += 1; },
+                '\\'=> if (n < buf.len) { buf[n] = '\\';n += 1; },
+                '/' => if (n < buf.len) { buf[n] = '/'; n += 1; },
+                'b' => if (n < buf.len) { buf[n] = 0x8; n += 1; },
+                'f' => if (n < buf.len) { buf[n] = 0xc; n += 1; },
+                'n' => if (n < buf.len) { buf[n] = 0xa; n += 1; },
+                'r' => if (n < buf.len) { buf[n] = 0xd; n += 1; },
+                't' => if (n < buf.len) { buf[n] = 0x9; n += 1; },
+                'u' => {
+                    const char = (p.hexdig()<<12) + (p.hexdig()<<8) + (p.hexdig()<<4) + p.hexdig();
+                    if (n + 6 < buf.len)
+                        n += std.unicode.utf8Encode(char, buf[n..n+5]) catch unreachable;
+                },
+                else => p.die("invalid escape sequence"),
+            },
+            0x20, 0x21, 0x23...0x5b, 0x5d...0xff => |b| if (n < buf.len) { buf[n] = b; n += 1; },
+            else => p.die("invalid character in string"),
+        };
+        return buf[0..n];
+    }
+
+    fn string(p: *Parser, buf: []u8) []u8 {
+        if (p.nextChr() != '"') p.die("expected string");
+        return p.stringContent(buf);
+    }
+
+    fn uintTail(p: *Parser, head: u8, T: anytype) T {
+        if (head == '0') return 0;
+        var v: T = head - '0'; // Assumption: T >= u8
+        // Assumption: we don't parse JSON "documents" that are a bare uint.
+        while (true) switch (p.nextByte()) {
+            '0'...'9' => |b| {
+                const newv = v *% 10 +% (b - '0');
+                if (newv < v) p.die("integer out of range");
+                v = newv;
+            },
+            else => |b| break p.undoNextByte(b),
+        };
+        if (v == 0) p.die("expected number");
+        return v;
+    }
+
+    fn uint(p: *Parser, T: anytype) T {
+        switch (p.nextChr()) {
+            '0'...'9' => |b| return p.uintTail(b, T),
+            else => p.die("expected number"),
+        }
+    }
+
+    fn boolean(p: *Parser) bool {
+        switch (p.nextChr()) {
+            't' => { p.expectLit("rue"); return true; },
+            'f' => { p.expectLit("alse"); return false; },
+            else => p.die("expected boolean"),
+        }
+    }
+
+    fn obj(p: *Parser) void {
+        if (p.nextChr() != '{') p.die("expected object");
+    }
+
+    fn key(p: *Parser, first: bool, buf: []u8) ?[]u8 {
+        const k = switch (p.nextChr()) {
+            ',' => blk: {
+                if (first) p.die("invalid JSON");
+                break :blk p.string(buf);
+            },
+            '"' => blk: {
+                if (!first) p.die("invalid JSON");
+                break :blk p.stringContent(buf);
+            },
+            '}' => return null,
+            else => p.die("invalid JSON"),
+        };
+        if (p.nextChr() != ':') p.die("invalid JSON");
+        return k;
+    }
+
+    fn array(p: *Parser) void {
+        if (p.nextChr() != '[') p.die("expected array");
+    }
+
+    fn elem(p: *Parser, first: bool) bool {
+        switch (p.nextChr()) {
+            ',' => if (first) p.die("invalid JSON") else return true,
+            ']' => return false,
+            else => |b| {
+                if (!first) p.die("invalid JSON");
+                p.undoNextByte(b);
+                return true;
+            },
+        }
+    }
+
+    fn skipContent(p: *Parser, head: u8) void {
+        switch (head) {
+            't' => p.expectLit("rue"),
+            'f' => p.expectLit("alse"),
+            'n' => p.expectLit("ull"),
+            '-', '0'...'9' =>
+                // Numbers are kind of annoying, this "parsing" is invalid and ultra-lazy.
+                while (true) switch (p.nextByte()) {
+                    '-', '+', 'e', 'E', '.', '0'...'9' => {},
+                    else => |b| return p.undoNextByte(b),
+                },
+            '"' => _ = p.stringContent(&[0]u8{}),
+            '[' => {
+                var first = true;
+                while (p.elem(first)) {
+                    first = false;
+                    p.skip();
+                }
+            },
+            '{' => {
+                var first = true;
+                while (p.key(first, &[0]u8{})) |_| {
+                    first = false;
+                    p.skip();
+                }
+            },
+            else => p.die("invalid JSON"),
+        }
+    }
+
+    fn skip(p: *Parser) void {
+        p.skipContent(p.nextChr());
+    }
+
+    fn eof(p: *Parser) void {
+        if (p.nextChr() != 0) p.die("trailing garbage");
+    }
+};
+
+
+// Should really add some invalid JSON test cases as well, but I'd first like
+// to benchmark the performance impact of using error returns instead of
+// calling ui.die().
+test "JSON parser" {
+    const json =
+        \\{
+        \\  "null": null,
+        \\  "true": true,
+        \\  "false": false,
+        \\  "zero":0 ,"uint": 123,
+        \\  "emptyObj": {},
+        \\  "emptyArray": [],
+        \\  "emptyString": "",
+        \\  "encString": "\"\\\/\b\f\n\uBe3F",
+        \\  "numbers": [0,1,20,-300, 3.4 ,0e-10  , -100.023e+13 ]
+        \\}
+        ;
+    var p = Parser{ .rd = undefined, .rdsize = json.len };
+    @memcpy(p.buf[0..json.len], json);
+    p.skip();
+
+    p = Parser{ .rd = undefined, .rdsize = json.len };
+    @memcpy(p.buf[0..json.len], json);
+    var buf: [128]u8 = undefined;
+    p.obj();
+
+    try std.testing.expectEqualStrings(p.key(true, &buf).?, "null");
+    p.skip();
+
+    try std.testing.expectEqualStrings(p.key(false, &buf).?, "true");
+    try std.testing.expect(p.boolean());
+
+    try std.testing.expectEqualStrings(p.key(false, &buf).?, "false");
+    try std.testing.expect(!p.boolean());
+
+    try std.testing.expectEqualStrings(p.key(false, &buf).?, "zero");
+    try std.testing.expectEqual(0, p.uint(u8));
+
+    try std.testing.expectEqualStrings(p.key(false, &buf).?, "uint");
+    try std.testing.expectEqual(123, p.uint(u8));
+
+    try std.testing.expectEqualStrings(p.key(false, &buf).?, "emptyObj");
+    p.obj();
+    try std.testing.expect(p.key(true, &buf) == null);
+
+    try std.testing.expectEqualStrings(p.key(false, &buf).?, "emptyArray");
+    p.array();
+    try std.testing.expect(!p.elem(true));
+
+    try std.testing.expectEqualStrings(p.key(false, &buf).?, "emptyString");
+    try std.testing.expectEqualStrings(p.string(&buf), "");
+
+    try std.testing.expectEqualStrings(p.key(false, &buf).?, "encString");
+    try std.testing.expectEqualStrings(p.string(&buf), "\"\\/\x08\x0c\n\u{be3f}");
+
+    try std.testing.expectEqualStrings(p.key(false, &buf).?, "numbers");
+    p.skip();
+
+    try std.testing.expect(p.key(true, &buf) == null);
+}
+
+
+const Ctx = struct {
+    p: *Parser,
+    sink: *sink.Thread,
+    items_seen: u64 = 0,
+    stat: sink.Stat = .{},
+    special: ?sink.Special = null,
+    namelen: usize = 0,
+    namebuf: [32*1024]u8 = undefined,
+};
+
+
+fn itemkey(ctx: *Ctx, key: []const u8) void {
+    const eq = std.mem.eql;
+    switch (if (key.len > 0) key[0] else @as(u8,0)) {
+        'a' => {
+            if (eq(u8, key, "asize")) {
+                ctx.stat.size = ctx.p.uint(u64);
+                return;
+            }
+        },
+        'd' => {
+            if (eq(u8, key, "dsize")) {
+                ctx.stat.blocks = @intCast(ctx.p.uint(u64)>>9);
+                return;
+            }
+            if (eq(u8, key, "dev")) {
+                ctx.stat.dev = ctx.p.uint(u64);
+                return;
+            }
+        },
+        'e' => {
+            if (eq(u8, key, "excluded")) {
+                var buf: [32]u8 = undefined;
+                const typ = ctx.p.string(&buf);
+                // "frmlnk" is also possible, but currently considered equivalent to "pattern".
+                if (eq(u8, typ, "otherfs")) ctx.special = .other_fs
+                else if (eq(u8, typ, "kernfs")) ctx.special = .kernfs
+                else ctx.special = .excluded;
+                return;
+            }
+        },
+        'g' => {
+            if (eq(u8, key, "gid")) {
+                ctx.stat.ext.gid = ctx.p.uint(u32);
+                return;
+            }
+        },
+        'h' => {
+            if (eq(u8, key, "hlnkc")) {
+                ctx.stat.hlinkc = ctx.p.boolean();
+                return;
+            }
+        },
+        'i' => {
+            if (eq(u8, key, "ino")) {
+                ctx.stat.ino = ctx.p.uint(u64);
+                return;
+            }
+        },
+        'm' => {
+            if (eq(u8, key, "mode")) {
+                ctx.stat.ext.mode = ctx.p.uint(u16);
+                return;
+            }
+            if (eq(u8, key, "mtime")) {
+                ctx.stat.ext.mtime = ctx.p.uint(u64);
+                // Accept decimal numbers, but discard the fractional part because our data model doesn't support it.
+                switch (ctx.p.nextByte()) {
+                    '.' =>
+                        while (true) switch (ctx.p.nextByte()) {
+                            '0'...'9' => {},
+                            else => |b| return ctx.p.undoNextByte(b),
+                        },
+                    else => |b| return ctx.p.undoNextByte(b),
+                }
+            }
+        },
+        'n' => {
+            if (eq(u8, key, "name")) {
+                if (ctx.namelen != 0) ctx.p.die("duplicate key");
+                ctx.namelen = ctx.p.string(&ctx.namebuf).len;
+                if (ctx.namelen > ctx.namebuf.len-5) ctx.p.die("too long file name");
+                return;
+            }
+            if (eq(u8, key, "nlink")) {
+                ctx.stat.nlink = ctx.p.uint(u31);
+                if (!ctx.stat.dir and ctx.stat.nlink > 1)
+                    ctx.stat.hlinkc = true;
+                return;
+            }
+            if (eq(u8, key, "notreg")) {
+                ctx.stat.reg = !ctx.p.boolean();
+                return;
+            }
+        },
+        'r' => {
+            if (eq(u8, key, "read_error")) {
+                if (ctx.p.boolean())
+                    ctx.special = .err;
+                return;
+            }
+        },
+        'u' => {
+            if (eq(u8, key, "uid")) {
+                ctx.stat.ext.uid = ctx.p.uint(u32);
+                return;
+            }
+        },
+        else => {},
+    }
+    ctx.p.skip();
+}
+
+
+fn item(ctx: *Ctx, parent: ?*sink.Dir, dev: u64) void {
+    ctx.stat = .{ .dev = dev };
+    ctx.namelen = 0;
+    ctx.special = null;
+    ctx.stat.dir = switch (ctx.p.nextChr()) {
+        '[' => blk: {
+            ctx.p.obj();
+            break :blk true;
+        },
+        '{' => false,
+        else => ctx.p.die("expected object or array"),
+    };
+    if (parent == null and !ctx.stat.dir) ctx.p.die("parent item must be a directory");
+
+    var keybuf: [32]u8 = undefined;
+    var first = true;
+    while (ctx.p.key(first, &keybuf)) |k| {
+        first = false;
+        itemkey(ctx, k);
+    }
+    if (ctx.namelen == 0) ctx.p.die("missing \"name\" field");
+    const name = (&ctx.namebuf)[0..ctx.namelen];
+
+    if (ctx.stat.dir and (ctx.special == null or ctx.special == .err)) {
+        const ndev = ctx.stat.dev;
+        const dir =
+            if (parent) |d| d.addDir(ctx.sink, name, &ctx.stat)
+            else sink.createRoot(name, &ctx.stat);
+        ctx.sink.setDir(dir);
+        if (ctx.special == .err) dir.setReadError(ctx.sink);
+        while (ctx.p.elem(false)) item(ctx, dir, ndev);
+        ctx.sink.setDir(parent);
+        dir.unref();
+    } else if (ctx.special) |s| {
+        parent.?.addSpecial(ctx.sink, name, s);
+        if (ctx.stat.dir and ctx.p.elem(false)) ctx.p.die("unexpected contents in an excluded directory");
+    } else {
+        parent.?.addStat(ctx.sink, name, &ctx.stat);
+    }
+
+    ctx.items_seen += 1;
+    if ((ctx.items_seen & 1023) == 0)
+        main.handleEvent(false, false);
+}
+
+
+pub fn import(path: [:0]const u8) void {
+    const sink_threads = sink.createThreads(1);
+    defer sink.done();
+
+    const fd = if (std.mem.eql(u8, "-", path)) std.io.getStdIn()
+             else std.fs.cwd().openFileZ(path, .{})
+                  catch |e| ui.die("Error reading file: {s}.\n", .{ui.errorString(e)});
+    defer fd.close();
+
+    var p = Parser{.rd = fd};
+    p.array();
+    if (p.uint(u16) != 1) p.die("incompatible major format version");
+    if (!p.elem(false)) p.die("expected array element");
+    _ = p.uint(u16); // minor version, ignored for now
+    if (!p.elem(false)) p.die("expected array element");
+
+    // metadata object
+    p.obj();
+    p.skipContent('{');
+
+    // Items
+    if (!p.elem(false)) p.die("expected array element");
+    var ctx = Ctx{.p = &p, .sink = &sink_threads[0]};
+    item(&ctx, null, 0);
+
+    // accept more trailing elements
+    while (p.elem(false)) p.skip();
+    p.eof();
+}
