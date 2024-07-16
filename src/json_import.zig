@@ -82,32 +82,50 @@ const Parser = struct {
         };
     }
 
+    fn stringContentSlow(p: *Parser, buf: []u8, head: u8, off: usize) []u8 {
+        @setCold(true);
+        var b = head;
+        var n = off;
+        while (true) {
+            switch (b) {
+                '"' => break,
+                '\\' => switch (p.nextByte()) {
+                    '"' => if (n < buf.len) { buf[n] = '"'; n += 1; },
+                    '\\'=> if (n < buf.len) { buf[n] = '\\';n += 1; },
+                    '/' => if (n < buf.len) { buf[n] = '/'; n += 1; },
+                    'b' => if (n < buf.len) { buf[n] = 0x8; n += 1; },
+                    'f' => if (n < buf.len) { buf[n] = 0xc; n += 1; },
+                    'n' => if (n < buf.len) { buf[n] = 0xa; n += 1; },
+                    'r' => if (n < buf.len) { buf[n] = 0xd; n += 1; },
+                    't' => if (n < buf.len) { buf[n] = 0x9; n += 1; },
+                    'u' => {
+                        const char = (p.hexdig()<<12) + (p.hexdig()<<8) + (p.hexdig()<<4) + p.hexdig();
+                        if (n + 6 < buf.len)
+                            n += std.unicode.utf8Encode(char, buf[n..n+5]) catch unreachable;
+                    },
+                    else => p.die("invalid escape sequence"),
+                },
+                0x20, 0x21, 0x23...0x5b, 0x5d...0xff => if (n < buf.len) { buf[n] = b; n += 1; },
+                else => p.die("invalid character in string"),
+            }
+            b = p.nextByte();
+        }
+        return buf[0..n];
+    }
+
     // Read a string (after the ") into buf.
     // Any characters beyond the size of the buffer are consumed but otherwise discarded.
     fn stringContent(p: *Parser, buf: []u8) []u8 {
+        // The common case (for ncdu dumps): string fits in the given buffer and does not contain any escapes.
         var n: usize = 0;
-        while (true) switch (p.nextByte()) {
-            '"' => break,
-            '\\' => switch (p.nextByte()) {
-                '"' => if (n < buf.len) { buf[n] = '"'; n += 1; },
-                '\\'=> if (n < buf.len) { buf[n] = '\\';n += 1; },
-                '/' => if (n < buf.len) { buf[n] = '/'; n += 1; },
-                'b' => if (n < buf.len) { buf[n] = 0x8; n += 1; },
-                'f' => if (n < buf.len) { buf[n] = 0xc; n += 1; },
-                'n' => if (n < buf.len) { buf[n] = 0xa; n += 1; },
-                'r' => if (n < buf.len) { buf[n] = 0xd; n += 1; },
-                't' => if (n < buf.len) { buf[n] = 0x9; n += 1; },
-                'u' => {
-                    const char = (p.hexdig()<<12) + (p.hexdig()<<8) + (p.hexdig()<<4) + p.hexdig();
-                    if (n + 6 < buf.len)
-                        n += std.unicode.utf8Encode(char, buf[n..n+5]) catch unreachable;
-                },
-                else => p.die("invalid escape sequence"),
-            },
-            0x20, 0x21, 0x23...0x5b, 0x5d...0xff => |b| if (n < buf.len) { buf[n] = b; n += 1; },
-            else => p.die("invalid character in string"),
-        };
-        return buf[0..n];
+        var b = p.nextByte();
+        while (n < buf.len and b >= 0x20 and b != '"' and b != '\\') {
+            buf[n] = b;
+            n += 1;
+            b = p.nextByte();
+        }
+        if (b == '"') return buf[0..n];
+        return p.stringContentSlow(buf, b, n);
     }
 
     fn string(p: *Parser, buf: []u8) []u8 {
