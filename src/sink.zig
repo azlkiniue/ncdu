@@ -63,6 +63,7 @@ pub const Special = enum { err, other_fs, kernfs, excluded };
 const JsonWriter = struct {
     fd: std.fs.File,
     wr: std.io.BufferedWriter(16*1024, std.fs.File.Writer),
+    dir_entry_open: bool = false,
 
     const String = struct {
         v: []const u8,
@@ -100,7 +101,22 @@ const JsonWriter = struct {
         return ctx;
     }
 
-    fn writeSpecial(ctx: *JsonWriter, name: []const u8, t: Special) void {
+    // A newly written directory entry is left "open", i.e. the '}' to close
+    // the item object is not written, to allow for a setReadError() to be
+    // caught if one happens before the first sub entry.
+    // Any read errors after the first sub entry are thrown away, but that's
+    // just a limitation of the JSON format.
+    fn closeDirEntry(ctx: *JsonWriter, rderr: bool) void {
+        if (ctx.dir_entry_open) {
+            ctx.dir_entry_open = false;
+            const w = ctx.wr.writer();
+            if (rderr) w.writeAll(",\"read_error\":true") catch |e| err(e);
+            w.writeByte('}') catch |e| err(e);
+        }
+    }
+
+    fn addSpecial(ctx: *JsonWriter, name: []const u8, t: Special) void {
+        ctx.closeDirEntry(false);
         // not necessarily correct, but mimics model.Entry.isDirectory()
         const isdir = switch (t) {
             .other_fs, .kernfs => true,
@@ -135,10 +151,26 @@ const JsonWriter = struct {
                 ",\"uid\":{d},\"gid\":{d},\"mode\":{d},\"mtime\":{d}",
                 .{ stat.ext.uid, stat.ext.gid, stat.ext.mode, stat.ext.mtime }
             ) catch |e| err(e);
-        w.writeByte('}') catch |e| err(e);
+    }
+
+    fn addStat(ctx: *JsonWriter, name: []const u8, stat: *const Stat) void {
+        ctx.closeDirEntry(false);
+        ctx.writeStat(name, stat, undefined);
+        ctx.wr.writer().writeByte('}') catch |e| err(e);
+    }
+
+    fn addDir(ctx: *JsonWriter, name: []const u8, stat: *const Stat, parent_dev: u64) void {
+        ctx.closeDirEntry(false);
+        ctx.writeStat(name, stat, parent_dev);
+        ctx.dir_entry_open = true;
+    }
+
+    fn setReadError(ctx: *JsonWriter) void {
+        ctx.closeDirEntry(true);
     }
 
     fn close(ctx: *JsonWriter) void {
+        ctx.closeDirEntry(false);
         ctx.wr.writer().writeAll("]") catch |e| err(e);
     }
 
@@ -325,7 +357,7 @@ pub const Dir = struct {
         _ = t.files_seen.fetchAdd(1, .monotonic);
         switch (d.out) {
             .mem => |*m| m.addSpecial(t.arena.allocator(), name, sp),
-            .json => |j| j.wr.writeSpecial(name, sp),
+            .json => |j| j.wr.addSpecial(name, sp),
         }
         if (sp == .err) {
             state.last_error_lock.lock();
@@ -340,15 +372,17 @@ pub const Dir = struct {
     pub fn addStat(d: *Dir, t: *Thread, name: []const u8, stat: *const Stat) void {
         _ = t.files_seen.fetchAdd(1, .monotonic);
         _ = t.bytes_seen.fetchAdd((stat.blocks *| 512) / @max(1, stat.nlink), .monotonic);
+        std.debug.assert(!stat.dir);
         switch (d.out) {
             .mem => |*m| _ = m.addStat(t.arena.allocator(), name, stat),
-            .json => |j| j.wr.writeStat(name, stat, 0),
+            .json => |j| j.wr.addStat(name, stat),
         }
     }
 
     pub fn addDir(d: *Dir, t: *Thread, name: []const u8, stat: *const Stat) *Dir {
         _ = t.files_seen.fetchAdd(1, .monotonic);
         _ = t.bytes_seen.fetchAdd(stat.blocks *| 512, .monotonic);
+        std.debug.assert(stat.dir);
 
         const s = main.allocator.create(Dir) catch unreachable;
         s.* = .{
@@ -360,7 +394,7 @@ pub const Dir = struct {
                 },
                 .json => |j| blk: {
                     std.debug.assert(d.refcnt.load(.monotonic) == 1);
-                    j.wr.writeStat(name, stat, j.dev);
+                    j.wr.addDir(name, stat, j.dev);
                     break :blk .{ .json = .{ .wr = j.wr, .dev = stat.dev } };
                 },
             },
@@ -373,7 +407,7 @@ pub const Dir = struct {
         _ = t;
         switch (d.out) {
             .mem => |*m| m.setReadError(),
-            .json => {},
+            .json => |j| j.wr.setReadError(),
         }
         state.last_error_lock.lock();
         defer state.last_error_lock.unlock();
@@ -514,7 +548,7 @@ pub fn createRoot(path: []const u8, stat: *const Stat) *Dir {
             break :sw Dir.Out{ .mem = MemDir.init(p) };
         },
         .json => |ctx| sw: {
-            ctx.writeStat(path, stat, 0);
+            ctx.addDir(path, stat, 0);
             break :sw Dir.Out{ .json = .{ .wr = ctx, .dev = stat.dev } };
         },
     };

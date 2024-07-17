@@ -229,7 +229,9 @@ const Thread = struct {
         }
 
         var edir = dir.fd.openDirZ(name, .{ .no_follow = true, .iterate = true }) catch {
-            dir.sink.addSpecial(t.sink, name, .err);
+            const s = dir.sink.addDir(t.sink, name, &stat);
+            s.setReadError(t.sink);
+            s.unref();
             return;
         };
 
