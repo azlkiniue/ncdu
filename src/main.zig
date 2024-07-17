@@ -429,6 +429,8 @@ fn readExcludeFile(path: [:0]const u8) !void {
 }
 
 pub fn main() void {
+    ui.main_thread = std.Thread.getCurrentId();
+
     // Grab thousands_sep from the current C locale.
     _ = c.setlocale(c.LC_ALL, "");
     if (c.localeconv()) |locale| {
@@ -574,6 +576,8 @@ var event_delay_timer: std.time.Timer = undefined;
 // Draw the screen and handle the next input event.
 // In non-blocking mode, screen drawing is rate-limited to keep this function fast.
 pub fn handleEvent(block: bool, force_draw: bool) void {
+    while (ui.oom_threads.load(.monotonic) > 0) ui.oom();
+
     if (block or force_draw or event_delay_timer.read() > config.update_delay) {
         if (ui.inited) _ = ui.c.erase();
         switch (state) {

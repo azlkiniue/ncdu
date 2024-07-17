@@ -18,6 +18,8 @@ pub const c = @cImport({
 });
 
 pub var inited: bool = false;
+pub var main_thread: std.Thread.Id = undefined;
+pub var oom_threads = std.atomic.Value(usize).init(0);
 
 pub var rows: u32 = undefined;
 pub var cols: u32 = undefined;
@@ -43,15 +45,21 @@ pub fn quit() noreturn {
 // Also, init() and other ncurses-related functions may have hidden allocation,
 // no clue if ncurses will consistently report OOM, but we're not handling that
 // right now.
-// TODO: Make thread-safe!
 pub fn oom() void {
-    const haveui = inited;
-    deinit();
-    const stderr = std.io.getStdErr();
-    stderr.writeAll("\x1b7\x1b[JOut of memory, trying again in 1 second. Hit Ctrl-C to abort.\x1b8") catch {};
-    std.time.sleep(std.time.ns_per_s);
-    if (haveui)
-        init();
+    @setCold(true);
+    if (main_thread == std.Thread.getCurrentId()) {
+        const haveui = inited;
+        deinit();
+        const stderr = std.io.getStdErr();
+        stderr.writeAll("\x1b7\x1b[JOut of memory, trying again in 1 second. Hit Ctrl-C to abort.\x1b8") catch {};
+        std.time.sleep(std.time.ns_per_s);
+        if (haveui)
+            init();
+    } else {
+        _ = oom_threads.fetchAdd(1, .monotonic);
+        std.time.sleep(std.time.ns_per_s);
+        _ = oom_threads.fetchSub(1, .monotonic);
+    }
 }
 
 // Dumb strerror() alternative for Zig file I/O, not complete.
