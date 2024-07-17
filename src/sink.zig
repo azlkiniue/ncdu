@@ -59,6 +59,98 @@ pub const Stat = struct {
 pub const Special = enum { err, other_fs, kernfs, excluded };
 
 
+// JSON output is necessarily single-threaded and items MUST be added depth-first.
+const JsonWriter = struct {
+    fd: std.fs.File,
+    wr: std.io.BufferedWriter(16*1024, std.fs.File.Writer),
+
+    const String = struct {
+        v: []const u8,
+        pub fn format(value: String, comptime _: []const u8, _: std.fmt.FormatOptions, w: anytype) !void {
+            try w.writeByte('"');
+            for (value.v) |b| switch (b) {
+                '\n' => try w.writeAll("\\n"),
+                '\r' => try w.writeAll("\\r"),
+                0x8  => try w.writeAll("\\b"),
+                '\t' => try w.writeAll("\\t"),
+                0xC  => try w.writeAll("\\f"),
+                '\\' => try w.writeAll("\\\\"),
+                '"'  => try w.writeAll("\\\""),
+                0...7, 0xB, 0xE...0x1F, 127 => try w.print("\\u00{x:0>2}", .{b}),
+                else => try w.writeByte(b)
+            };
+            try w.writeByte('"');
+        }
+    };
+
+    fn err(e: anyerror) noreturn {
+        ui.die("Error writing to file: {s}.\n", .{ ui.errorString(e) });
+    }
+
+    fn init(out: std.fs.File) *JsonWriter {
+        var ctx = main.allocator.create(JsonWriter) catch unreachable;
+        ctx.* = .{
+            .fd = out,
+            .wr = .{ .unbuffered_writer = out.writer() },
+        };
+        ctx.wr.writer().print(
+            "[1,2,{{\"progname\":\"ncdu\",\"progver\":\"{s}\",\"timestamp\":{d}}}",
+            .{ main.program_version, std.time.timestamp() }
+        ) catch |e| err(e);
+        return ctx;
+    }
+
+    fn writeSpecial(ctx: *JsonWriter, name: []const u8, t: Special) void {
+        // not necessarily correct, but mimics model.Entry.isDirectory()
+        const isdir = switch (t) {
+            .other_fs, .kernfs => true,
+            .err, .excluded => false,
+        };
+        ctx.wr.writer().print(",\n{s}{{\"name\":{},{s}}}{s}", .{
+            if (isdir) "[" else "",
+            String{.v=name},
+            switch (t) {
+                .err => "\"read_error\":true",
+                .other_fs => "\"excluded\":\"othfs\"",
+                .kernfs => "\"excluded\":\"kernfs\"",
+                .excluded => "\"excluded\":\"pattern\"",
+            },
+            if (isdir) "]" else "",
+        }) catch |e| err(e);
+    }
+
+    fn writeStat(ctx: *JsonWriter, name: []const u8, stat: *const Stat, parent_dev: u64) void {
+        const w = ctx.wr.writer();
+        w.print(",\n{s}{{\"name\":{}", .{
+            if (stat.dir) "[" else "",
+            String{.v=name},
+        }) catch |e| err(e);
+        if (stat.size > 0) w.print(",\"asize\":{d}", .{ stat.size }) catch |e| err(e);
+        if (stat.blocks > 0) w.print(",\"dsize\":{d}", .{ util.blocksToSize(stat.blocks) }) catch |e| err(e);
+        if (stat.dir and stat.dev != parent_dev) w.print(",\"dev\":{d}", .{ stat.dev }) catch |e| err(e);
+        if (stat.hlinkc) w.print(",\"ino\":{d},\"hlnkc\":true,\"nlink\":{d}", .{ stat.ino, stat.nlink }) catch |e| err(e);
+        if (!stat.dir and !stat.reg) w.writeAll(",\"notreg\":true") catch |e| err(e);
+        if (main.config.extended)
+            w.print(
+                ",\"uid\":{d},\"gid\":{d},\"mode\":{d},\"mtime\":{d}",
+                .{ stat.ext.uid, stat.ext.gid, stat.ext.mode, stat.ext.mtime }
+            ) catch |e| err(e);
+        w.writeByte('}') catch |e| err(e);
+    }
+
+    fn close(ctx: *JsonWriter) void {
+        ctx.wr.writer().writeAll("]") catch |e| err(e);
+    }
+
+    fn done(ctx: *JsonWriter) void {
+        ctx.wr.writer().writeAll("]\n") catch |e| err(e);
+        ctx.wr.flush() catch |e| err(e);
+        ctx.fd.close();
+        main.allocator.destroy(ctx);
+    }
+};
+
+
 const MemDir = struct {
     dir: *model.Dir,
     entries: Map,
@@ -223,12 +315,17 @@ pub const Dir = struct {
 
     const Out = union(enum) {
         mem: MemDir,
+        json: struct {
+            dev: u64,
+            wr: *JsonWriter,
+        },
     };
 
     pub fn addSpecial(d: *Dir, t: *Thread, name: []const u8, sp: Special) void {
         _ = t.files_seen.fetchAdd(1, .monotonic);
         switch (d.out) {
             .mem => |*m| m.addSpecial(t.arena.allocator(), name, sp),
+            .json => |j| j.wr.writeSpecial(name, sp),
         }
         if (sp == .err) {
             state.last_error_lock.lock();
@@ -245,6 +342,7 @@ pub const Dir = struct {
         _ = t.bytes_seen.fetchAdd((stat.blocks *| 512) / @max(1, stat.nlink), .monotonic);
         switch (d.out) {
             .mem => |*m| _ = m.addStat(t.arena.allocator(), name, stat),
+            .json => |j| j.wr.writeStat(name, stat, 0),
         }
     }
 
@@ -260,6 +358,11 @@ pub const Dir = struct {
                 .mem => |*m| .{
                     .mem = MemDir.init(m.addStat(t.arena.allocator(), name, stat).dir().?)
                 },
+                .json => |j| blk: {
+                    std.debug.assert(d.refcnt.load(.monotonic) == 1);
+                    j.wr.writeStat(name, stat, j.dev);
+                    break :blk .{ .json = .{ .wr = j.wr, .dev = stat.dev } };
+                },
             },
         };
         d.ref();
@@ -270,6 +373,7 @@ pub const Dir = struct {
         _ = t;
         switch (d.out) {
             .mem => |*m| m.setReadError(),
+            .json => {},
         }
         state.last_error_lock.lock();
         defer state.last_error_lock.unlock();
@@ -304,6 +408,7 @@ pub const Dir = struct {
 
         switch (d.out) {
             .mem => |*m| m.final(if (d.parent) |p| &p.out.mem else null),
+            .json => |j| j.wr.close(),
         }
 
         if (d.parent) |p| p.unref();
@@ -340,12 +445,19 @@ pub const state = struct {
 
     pub const Out = union(enum) {
         mem: ?*model.Dir,
+        json: *JsonWriter,
     };
 };
 
 
+pub fn setupJsonOutput(out: std.fs.File) void {
+    state.out = state.Out{ .json = JsonWriter.init(out) };
+}
+
+
 // Must be the first thing to call from a source; initializes global state.
 pub fn createThreads(num: usize) []Thread {
+    std.debug.assert(num == 1 or state.out != .json);
     state.status = .running;
     if (state.last_error) |p| main.allocator.free(p);
     state.last_error = null;
@@ -357,20 +469,23 @@ pub fn createThreads(num: usize) []Thread {
 
 // Must be the last thing to call from a source.
 pub fn done() void {
-    if (state.out == .mem) {
-        state.status = .hlcnt;
-        main.handleEvent(false, true);
-        const dir = state.out.mem orelse model.root;
-        var it: ?*model.Dir = dir;
-        while (it) |p| : (it = p.parent) {
-            p.updateSubErr();
-            if (p != dir) {
-                p.entry.pack.blocks +|= dir.entry.pack.blocks;
-                p.entry.size +|= dir.entry.size;
-                p.items +|= dir.items + 1;
+    switch (state.out) {
+        .mem => {
+            state.status = .hlcnt;
+            main.handleEvent(false, true);
+            const dir = state.out.mem orelse model.root;
+            var it: ?*model.Dir = dir;
+            while (it) |p| : (it = p.parent) {
+                p.updateSubErr();
+                if (p != dir) {
+                    p.entry.pack.blocks +|= dir.entry.pack.blocks;
+                    p.entry.size +|= dir.entry.size;
+                    p.items +|= dir.items + 1;
+                }
             }
-        }
-        model.inodes.addAllStats();
+            model.inodes.addAllStats();
+        },
+        .json => |j| j.done(),
     }
     state.status = .done;
     main.allocator.free(state.threads);
@@ -396,7 +511,11 @@ pub fn createRoot(path: []const u8, stat: *const Stat) *Dir {
             p.entry.pack.blocks = stat.blocks;
             p.entry.size = stat.size;
             p.pack.dev = model.devices.getId(stat.dev);
-            break :sw .{ .mem = MemDir.init(p) };
+            break :sw Dir.Out{ .mem = MemDir.init(p) };
+        },
+        .json => |ctx| sw: {
+            ctx.writeStat(path, stat, 0);
+            break :sw Dir.Out{ .json = .{ .wr = ctx, .dev = stat.dev } };
         },
     };
 

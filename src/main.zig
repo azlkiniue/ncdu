@@ -513,11 +513,11 @@ pub fn main() void {
     event_delay_timer = std.time.Timer.start() catch unreachable;
     defer ui.deinit();
 
-    const out_file = if (export_file) |f| (
+    if (export_file) |f| sink.setupJsonOutput(
         if (std.mem.eql(u8, f, "-")) stdout
         else std.fs.cwd().createFileZ(f, .{})
              catch |e| ui.die("Error opening export file: {s}.\n", .{ui.errorString(e)})
-    ) else null;
+    );
 
     if (import_file) |f| {
         json_import.import(f);
@@ -529,7 +529,7 @@ pub fn main() void {
             else |_| (scan_dir orelse ".");
         scan.scan(path) catch |e| ui.die("Error opening directory: {s}.\n", .{ui.errorString(e)});
     }
-    if (quit_after_scan or out_file != null) return;
+    if (quit_after_scan or export_file != null) return;
 
     config.can_shell = config.can_shell orelse !config.imported;
     config.can_delete = config.can_delete orelse !config.imported;
