@@ -4,6 +4,7 @@
 const std = @import("std");
 const main = @import("main.zig");
 const model = @import("model.zig");
+const mem_src = @import("mem_src.zig");
 const ui = @import("ui.zig");
 const util = @import("util.zig");
 
@@ -267,13 +268,15 @@ const MemDir = struct {
     }
 
     fn addStat(self: *MemDir, alloc: std.mem.Allocator, name: []const u8, stat: *const Stat) *model.Entry {
-        self.dir.items +|= 1;
-        if (!stat.hlinkc) {
-            self.dir.entry.pack.blocks +|= stat.blocks;
-            self.dir.entry.size +|= stat.size;
-        }
-        if (self.dir.entry.ext()) |e| {
-            if (stat.ext.mtime > e.mtime) e.mtime = stat.ext.mtime;
+        if (state.defer_json == null) {
+            self.dir.items +|= 1;
+            if (!stat.hlinkc) {
+                self.dir.entry.pack.blocks +|= stat.blocks;
+                self.dir.entry.size +|= stat.size;
+            }
+            if (self.dir.entry.ext()) |e| {
+                if (stat.ext.mtime > e.mtime) e.mtime = stat.ext.mtime;
+            }
         }
 
         const etype = if (stat.dir) model.EType.dir
@@ -312,6 +315,9 @@ const MemDir = struct {
                 else it = &e.next;
             }
         }
+        self.entries.deinit();
+
+        if (state.defer_json != null) return;
 
         // Grab counts collected from subdirectories
         self.dir.entry.pack.blocks +|= self.blocks;
@@ -334,7 +340,6 @@ const MemDir = struct {
             }
             if (self.suberr or self.dir.pack.suberr or self.dir.pack.err) p.suberr = true;
         }
-        self.entries.deinit();
     }
 };
 
@@ -473,6 +478,7 @@ pub const state = struct {
     pub var status: enum { done, err, zeroing, hlcnt, running } = .running;
     pub var threads: []Thread = undefined;
     pub var out: Out = .{ .mem = null };
+    pub var defer_json: ?*JsonWriter = null;
 
     pub var last_error: ?[:0]u8 = null;
     var last_error_lock = std.Thread.Mutex{};
@@ -492,7 +498,16 @@ pub fn setupJsonOutput(out: std.fs.File) void {
 
 // Must be the first thing to call from a source; initializes global state.
 pub fn createThreads(num: usize) []Thread {
-    std.debug.assert(num == 1 or state.out != .json);
+    switch (state.out) {
+        .mem => {},
+        .json => |j| {
+            if (num > 1) {
+                state.out = state.Out{ .mem = null };
+                state.defer_json = j;
+            }
+        },
+    }
+
     state.status = .running;
     if (state.last_error) |p| main.allocator.free(p);
     state.last_error = null;
@@ -505,7 +520,7 @@ pub fn createThreads(num: usize) []Thread {
 // Must be the last thing to call from a source.
 pub fn done() void {
     switch (state.out) {
-        .mem => {
+        .mem => if (state.defer_json == null) {
             state.status = .hlcnt;
             main.handleEvent(false, true);
             const dir = state.out.mem orelse model.root;
@@ -524,6 +539,14 @@ pub fn done() void {
     }
     state.status = .done;
     main.allocator.free(state.threads);
+
+    // We scanned into memory, now we need to scan from memory to JSON
+    if (state.defer_json) |j| {
+        state.out = state.Out{ .json = j };
+        state.defer_json = null;
+        mem_src.run(model.root);
+    }
+
     // Clear the screen when done.
     if (main.config.scan_ui == .line) main.handleEvent(false, true);
 }

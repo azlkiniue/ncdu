@@ -306,7 +306,6 @@ test "JSON parser" {
 const Ctx = struct {
     p: *Parser,
     sink: *sink.Thread,
-    items_seen: u64 = 0,
     stat: sink.Stat = .{},
     special: ?sink.Special = null,
     namelen: usize = 0,
@@ -457,8 +456,7 @@ fn item(ctx: *Ctx, parent: ?*sink.Dir, dev: u64) void {
         parent.?.addStat(ctx.sink, name, &ctx.stat);
     }
 
-    ctx.items_seen += 1;
-    if ((ctx.items_seen & 1023) == 0)
+    if ((ctx.sink.files_seen.load(.monotonic) & 1024) == 0)
         main.handleEvent(false, false);
 }
 
