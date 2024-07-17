@@ -290,9 +290,10 @@ const MemDir = struct {
         if (e.link()) |l| {
             l.parent = self.dir;
             l.ino = stat.ino;
+            l.pack.nlink = stat.nlink;
             model.inodes.lock.lock();
             defer model.inodes.lock.unlock();
-            l.addLink(stat.nlink);
+            l.addLink();
         }
         if (e.ext()) |ext| ext.* = stat.ext;
         return e;

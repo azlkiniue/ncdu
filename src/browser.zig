@@ -489,7 +489,7 @@ const info = struct {
             box.move(row.*, 3);
             ui.style(.bold);
             ui.addstr("   Link count: ");
-            ui.addnum(.default, model.inodes.map.get(l).?.nlink);
+            ui.addnum(.default, l.pack.nlink);
             box.move(row.*, 23);
             ui.style(.bold);
             ui.addstr("  Inode: ");

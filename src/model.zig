@@ -210,7 +210,17 @@ pub const Link = extern struct {
     prev: *Link align(1) = undefined,
     // dev is inherited from the parent Dir
     ino: u64 align(1) = undefined,
+    pack: Pack align(1) = .{},
     name: [0]u8 = undefined,
+
+    const Pack = packed struct(u32) {
+        // Whether this Inode is counted towards the parent directories.
+        // Is kept synchronized between all Link nodes with the same dev/ino.
+        counted: bool = false,
+        // Number of links for this inode. When set to '0', we don't know the
+        // actual nlink count; which happens for old JSON dumps.
+        nlink: u31 = undefined,
+    };
 
     // Return value should be freed with main.allocator.
     pub fn path(self: *const @This(), withRoot: bool) [:0]const u8 {
@@ -222,17 +232,13 @@ pub const Link = extern struct {
     }
 
     // Add this link to the inodes map and mark it as 'uncounted'.
-    pub fn addLink(l: *@This(), nlink: u31) void {
-        var d = inodes.map.getOrPut(l) catch unreachable;
+    pub fn addLink(l: *@This()) void {
+        const d = inodes.map.getOrPut(l) catch unreachable;
         if (!d.found_existing) {
-            d.value_ptr.* = .{ .counted = false, .nlink = nlink };
             l.next = l;
             l.prev = l;
         } else {
-            inodes.setStats(.{ .key_ptr = d.key_ptr, .value_ptr = d.value_ptr }, false);
-            // If the nlink counts are not consistent, reset to 0 so we calculate with what we have instead.
-            if (d.value_ptr.nlink != nlink)
-                d.value_ptr.nlink = 0;
+            inodes.setStats(l, false);
             l.next = d.key_ptr.*;
             l.prev = d.key_ptr.*.prev;
             l.next.prev = l;
@@ -243,8 +249,8 @@ pub const Link = extern struct {
 
     // Remove this link from the inodes map and remove its stats from parent directories.
     fn removeLink(l: *@This()) void {
+        inodes.setStats(l, false);
         const entry = inodes.map.getEntry(l) orelse return;
-        inodes.setStats(entry, false);
         if (l.next == l) {
             _ = inodes.map.remove(l);
             _ = inodes.uncounted.remove(l);
@@ -317,7 +323,7 @@ pub const inodes = struct {
     // node in the list. Link entries with the same dev/ino are part of a
     // circular linked list, so you can iterate through all of them with this
     // single pointer.
-    const Map = std.HashMap(*Link, Inode, HashContext, 80);
+    const Map = std.HashMap(*Link, void, HashContext, 80);
     pub var map = Map.init(main.allocator);
 
     // List of nodes in 'map' with !counted, to speed up addAllStats().
@@ -328,17 +334,6 @@ pub const inodes = struct {
     var uncounted_full = true; // start with true for the initial scan
 
     pub var lock = std.Thread.Mutex{};
-
-    const Inode = packed struct {
-        // Whether this Inode is counted towards the parent directories.
-        counted: bool,
-        // Number of links for this inode. When set to '0', we don't know the
-        // actual nlink count, either because it wasn't part of the imported
-        // JSON data or because we read inconsistent values from the
-        // filesystem.  The count will then be updated by the actual number of
-        // links in our in-memory tree.
-        nlink: u31,
-    };
 
     const HashContext = struct {
         pub fn hash(_: @This(), l: *Link) u64 {
@@ -366,16 +361,18 @@ pub const inodes = struct {
     // the list of *Links and their sizes and counts must be in the exact same
     // state as when the stats were added. Hence, any modification to the Link
     // state should be preceded by a setStats(.., false).
-    fn setStats(entry: Map.Entry, add: bool) void {
-        if (entry.value_ptr.counted == add) return;
-        entry.value_ptr.counted = add;
+    fn setStats(l: *Link, add: bool) void {
+        if (l.pack.counted == add) return;
 
         var nlink: u31 = 0;
+        var inconsistent = false;
         var dirs = std.AutoHashMap(*Dir, u32).init(main.allocator);
         defer dirs.deinit();
-        var it = entry.key_ptr.*;
+        var it = l;
         while (true) {
+            it.pack.counted = add;
             nlink += 1;
+            if (it.pack.nlink != l.pack.nlink) inconsistent = true;
             var parent: ?*Dir = it.parent;
             while (parent) |p| : (parent = p.parent) {
                 const de = dirs.getOrPut(p) catch unreachable;
@@ -383,30 +380,38 @@ pub const inodes = struct {
                 else de.value_ptr.* = 1;
             }
             it = it.next;
-            if (it == entry.key_ptr.*)
+            if (it == l)
                 break;
         }
 
-        if (entry.value_ptr.nlink < nlink) entry.value_ptr.nlink = nlink
-        else nlink = entry.value_ptr.nlink;
+        // There's not many sensible things we can do when we encounter
+        // inconsistent nlink counts. Current approach is to use the number of
+        // times we've seen this link in our tree as fallback for when the
+        // nlink counts aren't matching. May want to add a warning of some
+        // sorts to the UI at some point.
+        if (!inconsistent and l.pack.nlink >= nlink) nlink = l.pack.nlink;
+
+        // XXX: We're also not testing for inconsistent entry sizes, instead
+        // using the given 'l' size for all Links. Might warrant a warning as
+        // well.
 
         var dir_iter = dirs.iterator();
         if (add) {
             while (dir_iter.next()) |de| {
-                de.key_ptr.*.entry.pack.blocks +|= entry.key_ptr.*.entry.pack.blocks;
-                de.key_ptr.*.entry.size        +|= entry.key_ptr.*.entry.size;
+                de.key_ptr.*.entry.pack.blocks +|= l.entry.pack.blocks;
+                de.key_ptr.*.entry.size        +|= l.entry.size;
                 if (de.value_ptr.* < nlink) {
-                    de.key_ptr.*.shared_blocks +|= entry.key_ptr.*.entry.pack.blocks;
-                    de.key_ptr.*.shared_size   +|= entry.key_ptr.*.entry.size;
+                    de.key_ptr.*.shared_blocks +|= l.entry.pack.blocks;
+                    de.key_ptr.*.shared_size   +|= l.entry.size;
                 }
             }
         } else {
             while (dir_iter.next()) |de| {
-                de.key_ptr.*.entry.pack.blocks -|= entry.key_ptr.*.entry.pack.blocks;
-                de.key_ptr.*.entry.size        -|= entry.key_ptr.*.entry.size;
+                de.key_ptr.*.entry.pack.blocks -|= l.entry.pack.blocks;
+                de.key_ptr.*.entry.size        -|= l.entry.size;
                 if (de.value_ptr.* < nlink) {
-                    de.key_ptr.*.shared_blocks -|= entry.key_ptr.*.entry.pack.blocks;
-                    de.key_ptr.*.shared_size   -|= entry.key_ptr.*.entry.size;
+                    de.key_ptr.*.shared_blocks -|= l.entry.pack.blocks;
+                    de.key_ptr.*.shared_size   -|= l.entry.size;
                 }
             }
         }
@@ -414,11 +419,11 @@ pub const inodes = struct {
 
     pub fn addAllStats() void {
         if (uncounted_full) {
-            var it = map.iterator();
-            while (it.next()) |e| setStats(e, true);
+            var it = map.keyIterator();
+            while (it.next()) |e| setStats(e.*, true);
         } else {
-            var it = uncounted.iterator();
-            while (it.next()) |u| if (map.getEntry(u.key_ptr.*)) |e| setStats(e, true);
+            var it = uncounted.keyIterator();
+            while (it.next()) |u| if (map.getKey(u.*)) |e| setStats(e, true);
         }
         uncounted_full = false;
         if (uncounted.count() > 0)
