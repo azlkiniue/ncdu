@@ -266,6 +266,9 @@ fn argConfig(args: *Args, opt: Args.Option) bool {
         else if (std.mem.eql(u8, val, "dark")) config.ui_color = .dark
         else if (std.mem.eql(u8, val, "dark-bg")) config.ui_color = .darkbg
         else ui.die("Unknown --color option: {s}.\n", .{val});
+    } else if (opt.is("-t") or opt.is("--threads")) {
+        const val = args.arg();
+        config.threads = std.fmt.parseInt(u8, val, 10) catch ui.die("Invalid number of --threads: {s}.\n", .{val});
     } else return false;
     return true;
 }
@@ -329,6 +332,7 @@ fn help() noreturn {
     \\  -v,-V,--version            Print version
     \\  -x                         Same filesystem
     \\  -e                         Enable extended information
+    \\  -t NUM                     Number of threads to use
     \\  -r                         Read only
     \\  -o FILE                    Export scanned directory to FILE
     \\  -f FILE                    Import scanned directory from FILE
@@ -487,7 +491,6 @@ pub fn main() void {
             else if (opt.is("-f")) import_file = allocator.dupeZ(u8, args.arg()) catch unreachable
             else if (opt.is("--ignore-config")) {}
             else if (opt.is("--quit-after-scan")) quit_after_scan = true // undocumented feature to help with benchmarking scan/import
-            else if (opt.is("--experimental-threads")) config.threads = std.fmt.parseInt(u8, args.arg(), 10) catch ui.die("Invalid number of threads.\n", .{})
             else if (argConfig(&args, opt)) {}
             else ui.die("Unrecognized option '{s}'.\n", .{opt.val});
         }

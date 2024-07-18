@@ -18,6 +18,7 @@
 .Op Fl \-include\-caches , \-exclude\-caches
 .Op Fl L , \-follow\-symlinks , \-no\-follow\-symlinks
 .Op Fl \-include\-kernfs , \-exclude\-kernfs
+.Op Fl t , \-threads Ar num
 .Op Fl 0 , 1 , 2
 .Op Fl q , \-slow\-ui\-updates , \-fast\-ui\-updates
 .Op Fl \-enable\-shell , \-disable\-shell
@@ -147,6 +148,16 @@ The exact counting behavior of this flag is subject to change in the future.
 .Pp
 The complete list of currently known pseudo filesystems is: binfmt, bpf, cgroup,
 cgroup2, debug, devpts, proc, pstore, security, selinux, sys, trace.
+.It Fl t , \-threads Ar num
+Number of threads to use when scanning the filesystem, currently defaults to 1.
+.Pp
+In single-threaded mode, the export function (see
+.Fl o )
+can operate with very little memory, but in multi-threaded mode the entire
+directory tree is first constructed in memory and written out after the
+filesystem scan has completed,
+This causes a delay in output and requires significantly more memory for large
+directory trees.
 .El
 .Ss Interface Options
 .Bl -tag -width Ds
@@ -159,9 +170,8 @@ When exporting the data with
 ncurses will not be initialized at all.
 This option is the default when exporting to standard output.
 .It Fl 1
-Similar to
-.Fl 0 ,
-but does give feedback on the scanning progress with a single line of output.
+Write progress information to the terminal, but don't open a full-screen
+ncurses interface.
 This option is the default when exporting to a file.
 .Pp
 In some cases, the ncurses browser interface which you'll see after the
