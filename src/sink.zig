@@ -63,42 +63,85 @@ pub const Special = enum { err, other_fs, kernfs, excluded };
 // JSON output is necessarily single-threaded and items MUST be added depth-first.
 const JsonWriter = struct {
     fd: std.fs.File,
-    wr: std.io.BufferedWriter(16*1024, std.fs.File.Writer),
+    // Must be large enough to hold PATH_MAX*6 plus some overhead.
+    // (The 6 is because, in the worst case, every byte expands to a "\u####"
+    // escape, and we do pessimistic estimates here in order to avoid checking
+    // buffer lengths for each and every write operation)
+    buf: [64*1024]u8 = undefined,
+    off: usize = 0,
     dir_entry_open: bool = false,
 
-    const String = struct {
-        v: []const u8,
-        pub fn format(value: String, comptime _: []const u8, _: std.fmt.FormatOptions, w: anytype) !void {
-            try w.writeByte('"');
-            for (value.v) |b| switch (b) {
-                '\n' => try w.writeAll("\\n"),
-                '\r' => try w.writeAll("\\r"),
-                0x8  => try w.writeAll("\\b"),
-                '\t' => try w.writeAll("\\t"),
-                0xC  => try w.writeAll("\\f"),
-                '\\' => try w.writeAll("\\\\"),
-                '"'  => try w.writeAll("\\\""),
-                0...7, 0xB, 0xE...0x1F, 127 => try w.print("\\u00{x:0>2}", .{b}),
-                else => try w.writeByte(b)
-            };
-            try w.writeByte('"');
-        }
-    };
+    fn flush(ctx: *JsonWriter, bytes: usize) void {
+        @setCold(true);
+        // This can only really happen when the root path exceeds PATH_MAX,
+        // in which case we would probably have error'ed out earlier anyway.
+        if (bytes > ctx.buf.len) ui.die("Error writing JSON export: path too long.\n", .{});
+        ctx.fd.writeAll(ctx.buf[0..ctx.off]) catch |e|
+            ui.die("Error writing to file: {s}.\n", .{ ui.errorString(e) });
+        ctx.off = 0;
+    }
 
-    fn err(e: anyerror) noreturn {
-        ui.die("Error writing to file: {s}.\n", .{ ui.errorString(e) });
+    fn ensureSpace(ctx: *JsonWriter, bytes: usize) void {
+        if (bytes > ctx.buf.len - ctx.off) ctx.flush(bytes);
+    }
+
+    fn write(ctx: *JsonWriter, s: []const u8) void {
+        @memcpy(ctx.buf[ctx.off..][0..s.len], s);
+        ctx.off += s.len;
+    }
+
+    fn writeByte(ctx: *JsonWriter, b: u8) void {
+        ctx.buf[ctx.off] = b;
+        ctx.off += 1;
+    }
+
+    // Write escaped string contents, excluding the quotes.
+    fn writeStr(ctx: *JsonWriter, s: []const u8) void {
+        for (s) |b| {
+            if (b >= 0x20 and b != '"' and b != '\\' and b != 127) ctx.writeByte(b)
+            else switch (b) {
+                '\n' => ctx.write("\\n"),
+                '\r' => ctx.write("\\r"),
+                0x8  => ctx.write("\\b"),
+                '\t' => ctx.write("\\t"),
+                0xC  => ctx.write("\\f"),
+                '\\' => ctx.write("\\\\"),
+                '"'  => ctx.write("\\\""),
+                else => {
+                    ctx.write("\\u00");
+                    const hexdig = "0123456789abcdef";
+                    ctx.writeByte(hexdig[b>>4]);
+                    ctx.writeByte(hexdig[b&0xf]);
+                },
+            }
+        }
+    }
+
+    fn writeUint(ctx: *JsonWriter, n: u64) void {
+        // Based on std.fmt.formatInt
+        var a = n;
+        var buf: [24]u8 = undefined;
+        var index: usize = buf.len;
+        while (a >= 100) : (a = @divTrunc(a, 100)) {
+            index -= 2;
+            buf[index..][0..2].* = std.fmt.digits2(@as(usize, @intCast(a % 100)));
+        }
+        if (a < 10) {
+            index -= 1;
+            buf[index] = '0' + @as(u8, @intCast(a));
+        } else {
+            index -= 2;
+            buf[index..][0..2].* = std.fmt.digits2(@as(usize, @intCast(a)));
+        }
+        ctx.write(buf[index..]);
     }
 
     fn init(out: std.fs.File) *JsonWriter {
         var ctx = main.allocator.create(JsonWriter) catch unreachable;
-        ctx.* = .{
-            .fd = out,
-            .wr = .{ .unbuffered_writer = out.writer() },
-        };
-        ctx.wr.writer().print(
-            "[1,2,{{\"progname\":\"ncdu\",\"progver\":\"{s}\",\"timestamp\":{d}}}",
-            .{ main.program_version, std.time.timestamp() }
-        ) catch |e| err(e);
+        ctx.* = .{ .fd = out };
+        ctx.write("[1,2,{\"progname\":\"ncdu\",\"progver\":\"" ++ main.program_version ++ "\",\"timestamp\":");
+        ctx.writeUint(@intCast(@max(0, std.time.timestamp())));
+        ctx.writeByte('}');
         return ctx;
     }
 
@@ -110,54 +153,70 @@ const JsonWriter = struct {
     fn closeDirEntry(ctx: *JsonWriter, rderr: bool) void {
         if (ctx.dir_entry_open) {
             ctx.dir_entry_open = false;
-            const w = ctx.wr.writer();
-            if (rderr) w.writeAll(",\"read_error\":true") catch |e| err(e);
-            w.writeByte('}') catch |e| err(e);
+            if (rderr) ctx.write(",\"read_error\":true");
+            ctx.writeByte('}');
         }
     }
 
     fn addSpecial(ctx: *JsonWriter, name: []const u8, t: Special) void {
         ctx.closeDirEntry(false);
+        ctx.ensureSpace(name.len*6 + 1000);
         // not necessarily correct, but mimics model.Entry.isDirectory()
         const isdir = switch (t) {
             .other_fs, .kernfs => true,
             .err, .excluded => false,
         };
-        ctx.wr.writer().print(",\n{s}{{\"name\":{},{s}}}{s}", .{
-            if (isdir) "[" else "",
-            String{.v=name},
-            switch (t) {
-                .err => "\"read_error\":true",
-                .other_fs => "\"excluded\":\"othfs\"",
-                .kernfs => "\"excluded\":\"kernfs\"",
-                .excluded => "\"excluded\":\"pattern\"",
-            },
-            if (isdir) "]" else "",
-        }) catch |e| err(e);
+        ctx.write(if (isdir) ",\n[{\"name\":\"" else ",\n{\"name\":\"");
+        ctx.writeStr(name);
+        ctx.writeStr(switch (t) {
+            .err => "\",\"read_error\":true",
+            .other_fs => "\",\"excluded\":\"othfs\"",
+            .kernfs => "\",\"excluded\":\"kernfs\"",
+            .excluded => "\",\"excluded\":\"pattern\"",
+        });
+        if (isdir) ctx.writeByte(']');
     }
 
     fn writeStat(ctx: *JsonWriter, name: []const u8, stat: *const Stat, parent_dev: u64) void {
-        const w = ctx.wr.writer();
-        w.print(",\n{s}{{\"name\":{}", .{
-            if (stat.dir) "[" else "",
-            String{.v=name},
-        }) catch |e| err(e);
-        if (stat.size > 0) w.print(",\"asize\":{d}", .{ stat.size }) catch |e| err(e);
-        if (stat.blocks > 0) w.print(",\"dsize\":{d}", .{ util.blocksToSize(stat.blocks) }) catch |e| err(e);
-        if (stat.dir and stat.dev != parent_dev) w.print(",\"dev\":{d}", .{ stat.dev }) catch |e| err(e);
-        if (stat.hlinkc) w.print(",\"ino\":{d},\"hlnkc\":true,\"nlink\":{d}", .{ stat.ino, stat.nlink }) catch |e| err(e);
-        if (!stat.dir and !stat.reg) w.writeAll(",\"notreg\":true") catch |e| err(e);
-        if (main.config.extended)
-            w.print(
-                ",\"uid\":{d},\"gid\":{d},\"mode\":{d},\"mtime\":{d}",
-                .{ stat.ext.uid, stat.ext.gid, stat.ext.mode, stat.ext.mtime }
-            ) catch |e| err(e);
+        ctx.ensureSpace(name.len*6 + 1000);
+        ctx.write(if (stat.dir) ",\n[{\"name\":\"" else ",\n{\"name\":\"");
+        ctx.writeStr(name);
+        ctx.writeByte('"');
+        if (stat.size > 0) {
+            ctx.write(",\"asize\":");
+            ctx.writeUint(stat.size);
+        }
+        if (stat.blocks > 0) {
+            ctx.write(",\"dsize\":");
+            ctx.writeUint(util.blocksToSize(stat.blocks));
+        }
+        if (stat.dir and stat.dev != parent_dev) {
+            ctx.write(",\"dev\":");
+            ctx.writeUint(stat.dev);
+        }
+        if (stat.hlinkc) {
+            ctx.write(",\"ino\":");
+            ctx.writeUint(stat.ino);
+            ctx.write(",\"hlnkc\":true,\"nlink\":");
+            ctx.writeUint(stat.nlink);
+        }
+        if (!stat.dir and !stat.reg) ctx.write(",\"notreg\":true");
+        if (main.config.extended) {
+            ctx.write(",\"uid\":");
+            ctx.writeUint(stat.ext.uid);
+            ctx.write(",\"gid\":");
+            ctx.writeUint(stat.ext.gid);
+            ctx.write(",\"mode\":");
+            ctx.writeUint(stat.ext.mode);
+            ctx.write(",\"mtime\":");
+            ctx.writeUint(stat.ext.mtime);
+        }
     }
 
     fn addStat(ctx: *JsonWriter, name: []const u8, stat: *const Stat) void {
         ctx.closeDirEntry(false);
         ctx.writeStat(name, stat, undefined);
-        ctx.wr.writer().writeByte('}') catch |e| err(e);
+        ctx.writeByte('}');
     }
 
     fn addDir(ctx: *JsonWriter, name: []const u8, stat: *const Stat, parent_dev: u64) void {
@@ -171,13 +230,14 @@ const JsonWriter = struct {
     }
 
     fn close(ctx: *JsonWriter) void {
+        ctx.ensureSpace(1000);
         ctx.closeDirEntry(false);
-        ctx.wr.writer().writeAll("]") catch |e| err(e);
+        ctx.writeByte(']');
     }
 
     fn done(ctx: *JsonWriter) void {
-        ctx.wr.writer().writeAll("]\n") catch |e| err(e);
-        ctx.wr.flush() catch |e| err(e);
+        ctx.write("]\n");
+        ctx.flush(0);
         ctx.fd.close();
         main.allocator.destroy(ctx);
     }
