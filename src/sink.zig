@@ -437,7 +437,7 @@ pub const Dir = struct {
 
     pub fn addStat(d: *Dir, t: *Thread, name: []const u8, stat: *const Stat) void {
         _ = t.files_seen.fetchAdd(1, .monotonic);
-        _ = t.bytes_seen.fetchAdd((stat.blocks *| 512) / @max(1, stat.nlink), .monotonic);
+        _ = t.addBytes((stat.blocks *| 512) / @max(1, stat.nlink));
         std.debug.assert(!stat.dir);
         switch (d.out) {
             .mem => |*m| _ = m.addStat(t.arena.allocator(), name, stat),
@@ -447,7 +447,7 @@ pub const Dir = struct {
 
     pub fn addDir(d: *Dir, t: *Thread, name: []const u8, stat: *const Stat) *Dir {
         _ = t.files_seen.fetchAdd(1, .monotonic);
-        _ = t.bytes_seen.fetchAdd(stat.blocks *| 512, .monotonic);
+        _ = t.addBytes(stat.blocks *| 512);
         std.debug.assert(stat.dir);
 
         const s = main.allocator.create(Dir) catch unreachable;
@@ -521,10 +521,29 @@ pub const Dir = struct {
 pub const Thread = struct {
     current_dir: ?*Dir = null,
     lock: std.Thread.Mutex = .{},
+    // On 32-bit architectures, bytes_seen is protected by the above mutex instead.
     bytes_seen: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
-    files_seen: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    files_seen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     // Arena allocator for model.Entry structs, these are never freed.
     arena: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+
+    fn addBytes(t: *Thread, bytes: u64) void {
+        if (@bitSizeOf(usize) >= 64) _ = t.bytes_seen.fetchAdd(bytes, .monotonic)
+        else {
+            t.lock.lock();
+            defer t.lock.unlock();
+            t.bytes_seen.raw += bytes;
+        }
+    }
+
+    fn getBytes(t: *Thread) u64 {
+        if (@bitSizeOf(usize) >= 64) return t.bytes_seen.load(.monotonic)
+        else {
+            t.lock.lock();
+            defer t.lock.unlock();
+            return t.bytes_seen.raw;
+        }
+    }
 
     pub fn setDir(t: *Thread, d: ?*Dir) void {
         t.lock.lock();
@@ -674,7 +693,7 @@ fn drawConsole() void {
         var bytes: u64 = 0;
         var files: u64 = 0;
         for (state.threads) |*t| {
-            bytes +|= t.bytes_seen.load(.monotonic);
+            bytes +|= t.getBytes();
             files += t.files_seen.load(.monotonic);
         }
         const r = ui.FmtSize.fmt(bytes);
@@ -703,7 +722,7 @@ fn drawProgress() void {
     var bytes: u64 = 0;
     var files: u64 = 0;
     for (state.threads) |*t| {
-        bytes +|= t.bytes_seen.load(.monotonic);
+        bytes +|= t.getBytes();
         files += t.files_seen.load(.monotonic);
     }
 
