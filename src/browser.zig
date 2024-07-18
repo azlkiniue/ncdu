@@ -380,10 +380,7 @@ const info = struct {
                 if (&l.entry == e)
                     break;
             }
-            // TODO: Zig's sort() implementation is type-generic and not very
-            // small. I suspect we can get a good save on our binary size by using
-            // a smaller or non-generic sort. This doesn't have to be very fast.
-            std.mem.sort(*model.Link, list.items, {}, lt);
+            std.sort.heap(*model.Link, list.items, {}, lt);
             for (list.items, 0..) |n,i| if (&n.entry == e) { links_idx = i; };
             links = list;
         }
