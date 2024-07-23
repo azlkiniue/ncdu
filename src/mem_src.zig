@@ -19,7 +19,7 @@ fn toStat(e: *model.Entry) sink.Stat {
             else if (el) |l| model.devices.list.items[l.parent.pack.dev]
             else undefined,
         .ino = if (el) |l| l.ino else undefined,
-        .nlink = if (el) |l| l.pack.nlink else undefined,
+        .nlink = if (el) |l| l.pack.nlink else 1,
         .hlinkc = el != null,
         .dir = e.pack.etype == .dir,
         .reg = if (e.file()) |f| !f.pack.notreg else e.pack.etype != .dir,
