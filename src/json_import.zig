@@ -337,7 +337,7 @@ fn itemkey(ctx: *Ctx, key: []const u8) void {
                 var buf: [32]u8 = undefined;
                 const typ = ctx.p.string(&buf);
                 // "frmlnk" is also possible, but currently considered equivalent to "pattern".
-                if (eq(u8, typ, "otherfs")) ctx.special = .other_fs
+                if (eq(u8, typ, "otherfs") or eq(u8, typ, "othfs")) ctx.special = .other_fs
                 else if (eq(u8, typ, "kernfs")) ctx.special = .kernfs
                 else ctx.special = .excluded;
                 return;

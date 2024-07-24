@@ -170,7 +170,7 @@ const JsonWriter = struct {
         ctx.writeStr(name);
         ctx.write(switch (t) {
             .err => "\",\"read_error\":true}",
-            .other_fs => "\",\"excluded\":\"othfs\"}",
+            .other_fs => "\",\"excluded\":\"otherfs\"}",
             .kernfs => "\",\"excluded\":\"kernfs\"}",
             .excluded => "\",\"excluded\":\"pattern\"}",
         });
