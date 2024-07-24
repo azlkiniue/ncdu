@@ -168,11 +168,11 @@ const JsonWriter = struct {
         };
         ctx.write(if (isdir) ",\n[{\"name\":\"" else ",\n{\"name\":\"");
         ctx.writeStr(name);
-        ctx.writeStr(switch (t) {
-            .err => "\",\"read_error\":true",
-            .other_fs => "\",\"excluded\":\"othfs\"",
-            .kernfs => "\",\"excluded\":\"kernfs\"",
-            .excluded => "\",\"excluded\":\"pattern\"",
+        ctx.write(switch (t) {
+            .err => "\",\"read_error\":true}",
+            .other_fs => "\",\"excluded\":\"othfs\"}",
+            .kernfs => "\",\"excluded\":\"kernfs\"}",
+            .excluded => "\",\"excluded\":\"pattern\"}",
         });
         if (isdir) ctx.writeByte(']');
     }
