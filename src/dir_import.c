@@ -490,7 +490,7 @@ static int iteminfo(void) {
         C(rlit("false", 5));
     } else if(strcmp(ctx->val, "excluded") == 0) {   /* excluded */
       C(rstring(ctx->val, 8));
-      if(strcmp(ctx->val, "otherfs") == 0)
+      if(strcmp(ctx->val, "otherfs") == 0 || strcmp(ctx->val, "othfs") == 0)
         ctx->buf_dir->flags |= FF_OTHFS;
       else if(strcmp(ctx->val, "kernfs") == 0)
         ctx->buf_dir->flags |= FF_KERNFS;

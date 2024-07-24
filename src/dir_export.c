@@ -108,7 +108,6 @@ static void output_info(struct dir *d, const char *name, struct dir_ext *e, unsi
     output_int(e->mtime);
   }
 
-  /* TODO: Including the actual number of links would be nicer. */
   if(d->flags & FF_HLNKC) {
     fputs(",\"ino\":", stream);
     output_int(d->ino);
@@ -123,7 +122,7 @@ static void output_info(struct dir *d, const char *name, struct dir_ext *e, unsi
   if(d->flags & FF_EXL)
     fputs(",\"excluded\":\"pattern\"", stream);
   else if(d->flags & FF_OTHFS)
-    fputs(",\"excluded\":\"othfs\"", stream);
+    fputs(",\"excluded\":\"otherfs\"", stream);
   else if(d->flags & FF_KERNFS)
     fputs(",\"excluded\":\"kernfs\"", stream);
   else if(d->flags & FF_FRMLNK)
