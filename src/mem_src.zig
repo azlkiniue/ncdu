@@ -46,7 +46,7 @@ fn rec(ctx: *Ctx, dir: *sink.Dir, entry: *model.Entry) void {
         var it = d.sub;
         while (it) |e| : (it = e.next) rec(ctx, ndir, e);
         ctx.sink.setDir(dir);
-        ndir.unref();
+        ndir.unref(ctx.sink);
         return;
     }
     if (entry.file()) |f| {
@@ -74,6 +74,6 @@ pub fn run(d: *model.Dir) void {
     var it = d.sub;
     while (it) |e| : (it = e.next) rec(&ctx, root, e);
 
-    root.unref();
+    root.unref(ctx.sink);
     sink.done();
 }

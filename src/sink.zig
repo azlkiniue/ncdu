@@ -7,6 +7,7 @@ const model = @import("model.zig");
 const mem_src = @import("mem_src.zig");
 const mem_sink = @import("mem_sink.zig");
 const json_export = @import("json_export.zig");
+const bin_export = @import("bin_export.zig");
 const ui = @import("ui.zig");
 const util = @import("util.zig");
 
@@ -78,6 +79,7 @@ pub const Dir = struct {
     const Out = union(enum) {
         mem: mem_sink.Dir,
         json: json_export.Dir,
+        bin: bin_export.Dir,
     };
 
     pub fn addSpecial(d: *Dir, t: *Thread, name: []const u8, sp: Special) void {
@@ -85,6 +87,7 @@ pub const Dir = struct {
         switch (d.out) {
             .mem => |*m| m.addSpecial(&t.sink.mem, name, sp),
             .json => |*j| j.addSpecial(name, sp),
+            .bin => |*b| b.addSpecial(&t.sink.bin, name, sp),
         }
         if (sp == .err) {
             global.last_error_lock.lock();
@@ -103,6 +106,7 @@ pub const Dir = struct {
         switch (d.out) {
             .mem => |*m| _ = m.addStat(&t.sink.mem, name, stat),
             .json => |*j| j.addStat(name, stat),
+            .bin => |*b| b.addStat(&t.sink.bin, name, stat),
         }
     }
 
@@ -119,6 +123,7 @@ pub const Dir = struct {
             .out = switch (d.out) {
                 .mem => |*m| .{ .mem = m.addDir(&t.sink.mem, name, stat) },
                 .json => |*j| .{ .json = j.addDir(name, stat) },
+                .bin => |*b| .{ .bin = b.addDir(stat) },
             },
         };
         d.ref();
@@ -130,6 +135,7 @@ pub const Dir = struct {
         switch (d.out) {
             .mem => |*m| m.setReadError(),
             .json => |*j| j.setReadError(),
+            .bin => |*b| b.setReadError(),
         }
         global.last_error_lock.lock();
         defer global.last_error_lock.unlock();
@@ -158,16 +164,17 @@ pub const Dir = struct {
         _ = d.refcnt.fetchAdd(1, .monotonic);
     }
 
-    pub fn unref(d: *Dir) void {
+    pub fn unref(d: *Dir, t: *Thread) void {
         if (d.refcnt.fetchSub(1, .release) != 1) return;
         d.refcnt.fence(.acquire);
 
         switch (d.out) {
             .mem => |*m| m.final(if (d.parent) |p| &p.out.mem else null),
             .json => |*j| j.final(),
+            .bin => |*b| b.final(&t.sink.bin, d.name, if (d.parent) |p| &p.out.bin else null),
         }
 
-        if (d.parent) |p| p.unref();
+        if (d.parent) |p| p.unref(t);
         if (d.name.len > 0) main.allocator.free(d.name);
         main.allocator.destroy(d);
     }
@@ -184,6 +191,7 @@ pub const Thread = struct {
     sink: union {
         mem: mem_sink.Thread,
         json: void,
+        bin: bin_export.Thread,
     } = .{.mem = .{}},
 
     fn addBytes(t: *Thread, bytes: u64) void {
@@ -215,7 +223,7 @@ pub const Thread = struct {
 pub const global = struct {
     pub var state: enum { done, err, zeroing, hlcnt, running } = .running;
     pub var threads: []Thread = undefined;
-    pub var sink: enum { json, mem } = .mem;
+    pub var sink: enum { json, mem, bin } = .mem;
 
     pub var last_error: ?[:0]u8 = null;
     var last_error_lock = std.Thread.Mutex{};
@@ -235,7 +243,13 @@ pub fn createThreads(num: usize) []Thread {
     if (global.last_error) |p| main.allocator.free(p);
     global.last_error = null;
     global.threads = main.allocator.alloc(Thread, num) catch unreachable;
-    for (global.threads) |*t| t.* = .{};
+    for (global.threads) |*t| t.* = .{
+        .sink = switch (global.sink) {
+            .mem  => .{ .mem  = .{} },
+            .json => .{ .json = {} },
+            .bin  => .{ .bin  = .{} },
+        },
+    };
     return global.threads;
 }
 
@@ -245,6 +259,7 @@ pub fn done() void {
     switch (global.sink) {
         .mem => mem_sink.done(),
         .json => json_export.done(),
+        .bin => bin_export.done(global.threads),
     }
     global.state = .done;
     main.allocator.free(global.threads);
@@ -268,6 +283,7 @@ pub fn createRoot(path: []const u8, stat: *const Stat) *Dir {
         .out = switch (global.sink) {
             .mem => .{ .mem = mem_sink.createRoot(path, stat) },
             .json => .{ .json = json_export.createRoot(path, stat) },
+            .bin => .{ .bin = bin_export.createRoot(stat) },
         },
     };
     return d;

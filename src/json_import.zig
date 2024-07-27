@@ -448,7 +448,7 @@ fn item(ctx: *Ctx, parent: ?*sink.Dir, dev: u64) void {
         if (ctx.special == .err) dir.setReadError(ctx.sink);
         while (ctx.p.elem(false)) item(ctx, dir, ndev);
         ctx.sink.setDir(parent);
-        dir.unref();
+        dir.unref(ctx.sink);
     } else if (ctx.special) |s| {
         parent.?.addSpecial(ctx.sink, name, s);
         if (ctx.stat.dir and ctx.p.elem(false)) ctx.p.die("unexpected contents in an excluded directory");

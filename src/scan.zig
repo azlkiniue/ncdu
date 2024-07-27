@@ -162,10 +162,10 @@ const Dir = struct {
         return d;
     }
 
-    fn destroy(d: *Dir) void {
+    fn destroy(d: *Dir, t: *Thread) void {
         d.pat.deinit();
         d.fd.close();
-        d.sink.unref();
+        d.sink.unref(t.sink);
         main.allocator.destroy(d);
     }
 };
@@ -231,7 +231,7 @@ const Thread = struct {
         var edir = dir.fd.openDirZ(name, .{ .no_follow = true, .iterate = true }) catch {
             const s = dir.sink.addDir(t.sink, name, &stat);
             s.setReadError(t.sink);
-            s.unref();
+            s.unref(t.sink);
             return;
         };
 
@@ -275,7 +275,7 @@ const Thread = struct {
                 if (entry) |e| t.scanOne(d, e.name)
                 else {
                     t.sink.setDir(null);
-                    t.stack.pop().destroy();
+                    t.stack.pop().destroy(t);
                 }
             }
         }
