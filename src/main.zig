@@ -7,7 +7,10 @@ const std = @import("std");
 const model = @import("model.zig");
 const scan = @import("scan.zig");
 const json_import = @import("json_import.zig");
+const json_export = @import("json_export.zig");
 const sink = @import("sink.zig");
+const mem_src = @import("mem_src.zig");
+const mem_sink = @import("mem_sink.zig");
 const ui = @import("ui.zig");
 const browser = @import("browser.zig");
 const delete = @import("delete.zig");
@@ -19,7 +22,10 @@ test "imports" {
     _ = model;
     _ = scan;
     _ = json_import;
+    _ = json_export;
     _ = sink;
+    _ = mem_src;
+    _ = mem_sink;
     _ = ui;
     _ = browser;
     _ = delete;
@@ -282,10 +288,10 @@ fn tryReadArgsFile(path: [:0]const u8) void {
     defer f.close();
 
     var arglist = std.ArrayList([:0]const u8).init(allocator);
-    
+
     var rd_ = std.io.bufferedReader(f.reader());
     const rd = rd_.reader();
-    
+
     var line_buf: [4096]u8 = undefined;
     var line_fbs = std.io.fixedBufferStream(&line_buf);
     const line_writer = line_fbs.writer();
@@ -518,11 +524,14 @@ pub fn main() void {
     event_delay_timer = std.time.Timer.start() catch unreachable;
     defer ui.deinit();
 
-    if (export_file) |f| sink.setupJsonOutput(
-        if (std.mem.eql(u8, f, "-")) stdout
-        else std.fs.cwd().createFileZ(f, .{})
-             catch |e| ui.die("Error opening export file: {s}.\n", .{ui.errorString(e)})
-    );
+    if (export_file) |f| {
+        const file =
+            if (std.mem.eql(u8, f, "-")) stdout
+            else std.fs.cwd().createFileZ(f, .{})
+                 catch |e| ui.die("Error opening export file: {s}.\n", .{ui.errorString(e)});
+        json_export.setupOutput(file);
+        sink.global.sink = .json;
+    }
 
     if (import_file) |f| {
         json_import.import(f);
@@ -551,10 +560,10 @@ pub fn main() void {
             .refresh => {
                 var full_path = std.ArrayList(u8).init(allocator);
                 defer full_path.deinit();
-                sink.state.out.mem.?.fmtPath(true, &full_path);
+                mem_sink.global.root.?.fmtPath(true, &full_path);
                 scan.scan(util.arrayListBufZ(&full_path)) catch {
-                    sink.state.last_error = allocator.dupeZ(u8, full_path.items) catch unreachable;
-                    sink.state.status = .err;
+                    sink.global.last_error = allocator.dupeZ(u8, full_path.items) catch unreachable;
+                    sink.global.state = .err;
                     while (state == .refresh) handleEvent(true, true);
                 };
                 state = .browse;

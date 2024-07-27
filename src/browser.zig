@@ -5,6 +5,7 @@ const std = @import("std");
 const main = @import("main.zig");
 const model = @import("model.zig");
 const sink = @import("sink.zig");
+const mem_sink = @import("mem_sink.zig");
 const delete = @import("delete.zig");
 const ui = @import("ui.zig");
 const c = @cImport(@cInclude("time.h"));
@@ -845,7 +846,8 @@ pub fn keyInput(ch: i32) void {
                 message = "Directory refresh feature disabled."
             else {
                 main.state = .refresh;
-                sink.state.out = sink.state.Out{ .mem = dir_parent };
+                sink.global.sink = .mem;
+                mem_sink.global.root = dir_parent;
             }
         },
         'b' => {

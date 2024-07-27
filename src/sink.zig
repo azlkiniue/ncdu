@@ -5,18 +5,24 @@ const std = @import("std");
 const main = @import("main.zig");
 const model = @import("model.zig");
 const mem_src = @import("mem_src.zig");
+const mem_sink = @import("mem_sink.zig");
+const json_export = @import("json_export.zig");
 const ui = @import("ui.zig");
 const util = @import("util.zig");
 
-// "sink" in this case is where the scan/import results (from scan.zig and
-// json_import.zig) are being forwarded to and processed. This code handles
-// aggregating the tree structure into memory or exporting it as JSON. Also
-// handles progress display.
+// Terminology note:
+// "source" is where scan results come from, these are scan.zig, mem_src.zig
+//   and json_import.zig.
+// "sink" is where scan results go to. This file provides a generic sink API
+//   for sources to use. The API forwards the results to specific sink
+//   implementations (mem_sink.zig or json_export.zig) and provides progress
+//   updates.
 
 // API for sources:
 //
 // Single-threaded:
 //
+//   createThreads(1)
 //   dir = createRoot(name, stat)
 //   dir.addSpecial(name, opt)
 //   dir.addFile(name, stat)
@@ -25,9 +31,11 @@ const util = @import("util.zig");
 //     sub.addstuff();
 //     sub.unref();
 //   dir.unref();
+//   done()
 //
 // Multi-threaded interleaving:
 //
+//   createThreads(n)
 //   dir = createRoot(name, stat)
 //   dir.addSpecial(name, opt)
 //   dir.addFile(name, stat)
@@ -38,6 +46,7 @@ const util = @import("util.zig");
 //   dir.unref(); // <- no more direct descendants for x, but subdirs could still be active
 //     sub2.addStuff();
 //     sub2.unref(); // <- this is where 'dir' is really done.
+//   done()
 //
 // Rule:
 //   No concurrent method calls on a single Dir object, but objects may be passed between threads.
@@ -60,377 +69,29 @@ pub const Stat = struct {
 pub const Special = enum { err, other_fs, kernfs, excluded };
 
 
-// JSON output is necessarily single-threaded and items MUST be added depth-first.
-const JsonWriter = struct {
-    fd: std.fs.File,
-    // Must be large enough to hold PATH_MAX*6 plus some overhead.
-    // (The 6 is because, in the worst case, every byte expands to a "\u####"
-    // escape, and we do pessimistic estimates here in order to avoid checking
-    // buffer lengths for each and every write operation)
-    buf: [64*1024]u8 = undefined,
-    off: usize = 0,
-    dir_entry_open: bool = false,
-
-    fn flush(ctx: *JsonWriter, bytes: usize) void {
-        @setCold(true);
-        // This can only really happen when the root path exceeds PATH_MAX,
-        // in which case we would probably have error'ed out earlier anyway.
-        if (bytes > ctx.buf.len) ui.die("Error writing JSON export: path too long.\n", .{});
-        ctx.fd.writeAll(ctx.buf[0..ctx.off]) catch |e|
-            ui.die("Error writing to file: {s}.\n", .{ ui.errorString(e) });
-        ctx.off = 0;
-    }
-
-    fn ensureSpace(ctx: *JsonWriter, bytes: usize) void {
-        if (bytes > ctx.buf.len - ctx.off) ctx.flush(bytes);
-    }
-
-    fn write(ctx: *JsonWriter, s: []const u8) void {
-        @memcpy(ctx.buf[ctx.off..][0..s.len], s);
-        ctx.off += s.len;
-    }
-
-    fn writeByte(ctx: *JsonWriter, b: u8) void {
-        ctx.buf[ctx.off] = b;
-        ctx.off += 1;
-    }
-
-    // Write escaped string contents, excluding the quotes.
-    fn writeStr(ctx: *JsonWriter, s: []const u8) void {
-        for (s) |b| {
-            if (b >= 0x20 and b != '"' and b != '\\' and b != 127) ctx.writeByte(b)
-            else switch (b) {
-                '\n' => ctx.write("\\n"),
-                '\r' => ctx.write("\\r"),
-                0x8  => ctx.write("\\b"),
-                '\t' => ctx.write("\\t"),
-                0xC  => ctx.write("\\f"),
-                '\\' => ctx.write("\\\\"),
-                '"'  => ctx.write("\\\""),
-                else => {
-                    ctx.write("\\u00");
-                    const hexdig = "0123456789abcdef";
-                    ctx.writeByte(hexdig[b>>4]);
-                    ctx.writeByte(hexdig[b&0xf]);
-                },
-            }
-        }
-    }
-
-    fn writeUint(ctx: *JsonWriter, n: u64) void {
-        // Based on std.fmt.formatInt
-        var a = n;
-        var buf: [24]u8 = undefined;
-        var index: usize = buf.len;
-        while (a >= 100) : (a = @divTrunc(a, 100)) {
-            index -= 2;
-            buf[index..][0..2].* = std.fmt.digits2(@as(usize, @intCast(a % 100)));
-        }
-        if (a < 10) {
-            index -= 1;
-            buf[index] = '0' + @as(u8, @intCast(a));
-        } else {
-            index -= 2;
-            buf[index..][0..2].* = std.fmt.digits2(@as(usize, @intCast(a)));
-        }
-        ctx.write(buf[index..]);
-    }
-
-    fn init(out: std.fs.File) *JsonWriter {
-        var ctx = main.allocator.create(JsonWriter) catch unreachable;
-        ctx.* = .{ .fd = out };
-        ctx.write("[1,2,{\"progname\":\"ncdu\",\"progver\":\"" ++ main.program_version ++ "\",\"timestamp\":");
-        ctx.writeUint(@intCast(@max(0, std.time.timestamp())));
-        ctx.writeByte('}');
-        return ctx;
-    }
-
-    // A newly written directory entry is left "open", i.e. the '}' to close
-    // the item object is not written, to allow for a setReadError() to be
-    // caught if one happens before the first sub entry.
-    // Any read errors after the first sub entry are thrown away, but that's
-    // just a limitation of the JSON format.
-    fn closeDirEntry(ctx: *JsonWriter, rderr: bool) void {
-        if (ctx.dir_entry_open) {
-            ctx.dir_entry_open = false;
-            if (rderr) ctx.write(",\"read_error\":true");
-            ctx.writeByte('}');
-        }
-    }
-
-    fn addSpecial(ctx: *JsonWriter, name: []const u8, t: Special) void {
-        ctx.closeDirEntry(false);
-        ctx.ensureSpace(name.len*6 + 1000);
-        // not necessarily correct, but mimics model.Entry.isDirectory()
-        const isdir = switch (t) {
-            .other_fs, .kernfs => true,
-            .err, .excluded => false,
-        };
-        ctx.write(if (isdir) ",\n[{\"name\":\"" else ",\n{\"name\":\"");
-        ctx.writeStr(name);
-        ctx.write(switch (t) {
-            .err => "\",\"read_error\":true}",
-            .other_fs => "\",\"excluded\":\"otherfs\"}",
-            .kernfs => "\",\"excluded\":\"kernfs\"}",
-            .excluded => "\",\"excluded\":\"pattern\"}",
-        });
-        if (isdir) ctx.writeByte(']');
-    }
-
-    fn writeStat(ctx: *JsonWriter, name: []const u8, stat: *const Stat, parent_dev: u64) void {
-        ctx.ensureSpace(name.len*6 + 1000);
-        ctx.write(if (stat.dir) ",\n[{\"name\":\"" else ",\n{\"name\":\"");
-        ctx.writeStr(name);
-        ctx.writeByte('"');
-        if (stat.size > 0) {
-            ctx.write(",\"asize\":");
-            ctx.writeUint(stat.size);
-        }
-        if (stat.blocks > 0) {
-            ctx.write(",\"dsize\":");
-            ctx.writeUint(util.blocksToSize(stat.blocks));
-        }
-        if (stat.dir and stat.dev != parent_dev) {
-            ctx.write(",\"dev\":");
-            ctx.writeUint(stat.dev);
-        }
-        if (stat.hlinkc) {
-            ctx.write(",\"ino\":");
-            ctx.writeUint(stat.ino);
-            ctx.write(",\"hlnkc\":true,\"nlink\":");
-            ctx.writeUint(stat.nlink);
-        }
-        if (!stat.dir and !stat.reg) ctx.write(",\"notreg\":true");
-        if (main.config.extended) {
-            ctx.write(",\"uid\":");
-            ctx.writeUint(stat.ext.uid);
-            ctx.write(",\"gid\":");
-            ctx.writeUint(stat.ext.gid);
-            ctx.write(",\"mode\":");
-            ctx.writeUint(stat.ext.mode);
-            ctx.write(",\"mtime\":");
-            ctx.writeUint(stat.ext.mtime);
-        }
-    }
-
-    fn addStat(ctx: *JsonWriter, name: []const u8, stat: *const Stat) void {
-        ctx.closeDirEntry(false);
-        ctx.writeStat(name, stat, undefined);
-        ctx.writeByte('}');
-    }
-
-    fn addDir(ctx: *JsonWriter, name: []const u8, stat: *const Stat, parent_dev: u64) void {
-        ctx.closeDirEntry(false);
-        ctx.writeStat(name, stat, parent_dev);
-        ctx.dir_entry_open = true;
-    }
-
-    fn setReadError(ctx: *JsonWriter) void {
-        ctx.closeDirEntry(true);
-    }
-
-    fn close(ctx: *JsonWriter) void {
-        ctx.ensureSpace(1000);
-        ctx.closeDirEntry(false);
-        ctx.writeByte(']');
-    }
-
-    fn done(ctx: *JsonWriter) void {
-        ctx.write("]\n");
-        ctx.flush(0);
-        ctx.fd.close();
-        main.allocator.destroy(ctx);
-    }
-};
-
-
-const MemDir = struct {
-    dir: *model.Dir,
-    entries: Map,
-
-    own_blocks: model.Blocks,
-    own_bytes: u64,
-
-    // Additional counts collected from subdirectories. Subdirs may run final()
-    // from separate threads so these need to be protected.
-    blocks: model.Blocks = 0,
-    bytes: u64 = 0,
-    items: u32 = 0,
-    mtime: u64 = 0,
-    suberr: bool = false,
-    lock: std.Thread.Mutex = .{},
-
-    const Map = std.HashMap(*model.Entry, void, HashContext, 80);
-
-    const HashContext = struct {
-        pub fn hash(_: @This(), e: *model.Entry) u64 {
-            return std.hash.Wyhash.hash(0, e.name());
-        }
-        pub fn eql(_: @This(), a: *model.Entry, b: *model.Entry) bool {
-            return a == b or std.mem.eql(u8, a.name(), b.name());
-        }
-    };
-
-    const HashContextAdapted = struct {
-        pub fn hash(_: @This(), v: []const u8) u64 {
-            return std.hash.Wyhash.hash(0, v);
-        }
-        pub fn eql(_: @This(), a: []const u8, b: *model.Entry) bool {
-            return std.mem.eql(u8, a, b.name());
-        }
-    };
-
-    fn init(dir: *model.Dir) MemDir {
-        var self = MemDir{
-            .dir = dir,
-            .entries = Map.initContext(main.allocator, HashContext{}),
-            .own_blocks = dir.entry.pack.blocks,
-            .own_bytes = dir.entry.size,
-        };
-
-        var count: Map.Size = 0;
-        var it = dir.sub;
-        while (it) |e| : (it = e.next) count += 1;
-        self.entries.ensureUnusedCapacity(count) catch unreachable;
-
-        it = dir.sub;
-        while (it) |e| : (it = e.next)
-            self.entries.putAssumeCapacity(e, {});
-        return self;
-    }
-
-    fn getEntry(self: *MemDir, alloc: std.mem.Allocator, etype: model.EType, isext: bool, name: []const u8) *model.Entry {
-        if (self.entries.getKeyAdapted(name, HashContextAdapted{})) |e| {
-            // XXX: In-place conversion may be possible in some cases.
-            if (e.pack.etype == etype and (!isext or e.pack.isext)) {
-                e.pack.isext = isext;
-                _ = self.entries.removeAdapted(name, HashContextAdapted{});
-                return e;
-            }
-        }
-        const e = model.Entry.create(alloc, etype, isext, name);
-        e.next = self.dir.sub;
-        self.dir.sub = e;
-        return e;
-    }
-
-    fn addSpecial(self: *MemDir, alloc: std.mem.Allocator, name: []const u8, t: Special) void {
-        self.dir.items += 1;
-        if (t == .err) self.dir.pack.suberr = true;
-
-        const e = self.getEntry(alloc, .file, false, name);
-        e.file().?.pack = switch (t) {
-            .err => .{ .err = true },
-            .other_fs => .{ .other_fs = true },
-            .kernfs => .{ .kernfs = true },
-            .excluded => .{ .excluded = true },
-        };
-    }
-
-    fn addStat(self: *MemDir, alloc: std.mem.Allocator, name: []const u8, stat: *const Stat) *model.Entry {
-        if (state.defer_json == null) {
-            self.dir.items +|= 1;
-            if (!stat.hlinkc) {
-                self.dir.entry.pack.blocks +|= stat.blocks;
-                self.dir.entry.size +|= stat.size;
-            }
-            if (self.dir.entry.ext()) |e| {
-                if (stat.ext.mtime > e.mtime) e.mtime = stat.ext.mtime;
-            }
-        }
-
-        const etype = if (stat.dir) model.EType.dir
-                      else if (stat.hlinkc) model.EType.link
-                      else model.EType.file;
-        const e = self.getEntry(alloc, etype, main.config.extended, name);
-        e.pack.blocks = stat.blocks;
-        e.size = stat.size;
-        if (e.dir()) |d| {
-            d.parent = self.dir;
-            d.pack.dev = model.devices.getId(stat.dev);
-        }
-        if (e.file()) |f| f.pack = .{ .notreg = !stat.dir and !stat.reg };
-        if (e.link()) |l| {
-            l.parent = self.dir;
-            l.ino = stat.ino;
-            l.pack.nlink = stat.nlink;
-            model.inodes.lock.lock();
-            defer model.inodes.lock.unlock();
-            l.addLink();
-        }
-        if (e.ext()) |ext| ext.* = stat.ext;
-        return e;
-    }
-
-    fn setReadError(self: *MemDir) void {
-        self.dir.pack.err = true;
-    }
-
-    fn final(self: *MemDir, parent: ?*MemDir) void {
-        // Remove entries we've not seen
-        if (self.entries.count() > 0) {
-            var it = &self.dir.sub;
-            while (it.*) |e| {
-                if (self.entries.getKey(e) == e) it.* = e.next
-                else it = &e.next;
-            }
-        }
-        self.entries.deinit();
-
-        if (state.defer_json != null) return;
-
-        // Grab counts collected from subdirectories
-        self.dir.entry.pack.blocks +|= self.blocks;
-        self.dir.entry.size +|= self.bytes;
-        self.dir.items +|= self.items;
-        if (self.suberr) self.dir.pack.suberr = true;
-        if (self.dir.entry.ext()) |e| {
-            if (self.mtime > e.mtime) e.mtime = self.mtime;
-        }
-
-        // Add own counts to parent
-        if (parent) |p| {
-            p.lock.lock();
-            defer p.lock.unlock();
-            p.blocks +|= self.dir.entry.pack.blocks - self.own_blocks;
-            p.bytes +|= self.dir.entry.size - self.own_bytes;
-            p.items +|= self.dir.items;
-            if (self.dir.entry.ext()) |e| {
-                if (e.mtime > p.mtime) p.mtime = e.mtime;
-            }
-            if (self.suberr or self.dir.pack.suberr or self.dir.pack.err) p.suberr = true;
-        }
-    }
-};
-
-
 pub const Dir = struct {
     refcnt: std.atomic.Value(usize) = std.atomic.Value(usize).init(1),
-    // (XXX: This allocation can be avoided when scanning to a MemDir)
     name: []const u8,
     parent: ?*Dir,
     out: Out,
 
     const Out = union(enum) {
-        mem: MemDir,
-        json: struct {
-            dev: u64,
-            wr: *JsonWriter,
-        },
+        mem: mem_sink.Dir,
+        json: json_export.Dir,
     };
 
     pub fn addSpecial(d: *Dir, t: *Thread, name: []const u8, sp: Special) void {
         _ = t.files_seen.fetchAdd(1, .monotonic);
         switch (d.out) {
-            .mem => |*m| m.addSpecial(t.arena.allocator(), name, sp),
-            .json => |j| j.wr.addSpecial(name, sp),
+            .mem => |*m| m.addSpecial(&t.sink.mem, name, sp),
+            .json => |*j| j.addSpecial(name, sp),
         }
         if (sp == .err) {
-            state.last_error_lock.lock();
-            defer state.last_error_lock.unlock();
-            if (state.last_error) |p| main.allocator.free(p);
+            global.last_error_lock.lock();
+            defer global.last_error_lock.unlock();
+            if (global.last_error) |p| main.allocator.free(p);
             const p = d.path();
-            state.last_error = std.fs.path.joinZ(main.allocator, &.{ p, name }) catch unreachable;
+            global.last_error = std.fs.path.joinZ(main.allocator, &.{ p, name }) catch unreachable;
             main.allocator.free(p);
         }
     }
@@ -440,8 +101,8 @@ pub const Dir = struct {
         _ = t.addBytes((stat.blocks *| 512) / @max(1, stat.nlink));
         std.debug.assert(!stat.dir);
         switch (d.out) {
-            .mem => |*m| _ = m.addStat(t.arena.allocator(), name, stat),
-            .json => |j| j.wr.addStat(name, stat),
+            .mem => |*m| _ = m.addStat(&t.sink.mem, name, stat),
+            .json => |*j| j.addStat(name, stat),
         }
     }
 
@@ -449,20 +110,15 @@ pub const Dir = struct {
         _ = t.files_seen.fetchAdd(1, .monotonic);
         _ = t.addBytes(stat.blocks *| 512);
         std.debug.assert(stat.dir);
+        std.debug.assert(d.out != .json or d.refcnt.load(.monotonic) == 1);
 
         const s = main.allocator.create(Dir) catch unreachable;
         s.* = .{
             .name = main.allocator.dupe(u8, name) catch unreachable,
             .parent = d,
             .out = switch (d.out) {
-                .mem => |*m| .{
-                    .mem = MemDir.init(m.addStat(t.arena.allocator(), name, stat).dir().?)
-                },
-                .json => |j| blk: {
-                    std.debug.assert(d.refcnt.load(.monotonic) == 1);
-                    j.wr.addDir(name, stat, j.dev);
-                    break :blk .{ .json = .{ .wr = j.wr, .dev = stat.dev } };
-                },
+                .mem => |*m| .{ .mem = m.addDir(&t.sink.mem, name, stat) },
+                .json => |*j| .{ .json = j.addDir(name, stat) },
             },
         };
         d.ref();
@@ -473,12 +129,12 @@ pub const Dir = struct {
         _ = t;
         switch (d.out) {
             .mem => |*m| m.setReadError(),
-            .json => |j| j.wr.setReadError(),
+            .json => |*j| j.setReadError(),
         }
-        state.last_error_lock.lock();
-        defer state.last_error_lock.unlock();
-        if (state.last_error) |p| main.allocator.free(p);
-        state.last_error = d.path();
+        global.last_error_lock.lock();
+        defer global.last_error_lock.unlock();
+        if (global.last_error) |p| main.allocator.free(p);
+        global.last_error = d.path();
     }
 
     fn path(d: *Dir) [:0]u8 {
@@ -508,7 +164,7 @@ pub const Dir = struct {
 
         switch (d.out) {
             .mem => |*m| m.final(if (d.parent) |p| &p.out.mem else null),
-            .json => |j| j.wr.close(),
+            .json => |*j| j.final(),
         }
 
         if (d.parent) |p| p.unref();
@@ -524,8 +180,11 @@ pub const Thread = struct {
     // On 32-bit architectures, bytes_seen is protected by the above mutex instead.
     bytes_seen: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     files_seen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
-    // Arena allocator for model.Entry structs, these are never freed.
-    arena: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+
+    sink: union {
+        mem: mem_sink.Thread,
+        json: void,
+    } = .{.mem = .{}},
 
     fn addBytes(t: *Thread, bytes: u64) void {
         if (@bitSizeOf(usize) >= 64) _ = t.bytes_seen.fetchAdd(bytes, .monotonic)
@@ -553,76 +212,46 @@ pub const Thread = struct {
 };
 
 
-pub const state = struct {
-    pub var status: enum { done, err, zeroing, hlcnt, running } = .running;
+pub const global = struct {
+    pub var state: enum { done, err, zeroing, hlcnt, running } = .running;
     pub var threads: []Thread = undefined;
-    pub var out: Out = .{ .mem = null };
-    pub var defer_json: ?*JsonWriter = null;
+    pub var sink: enum { json, mem } = .mem;
 
     pub var last_error: ?[:0]u8 = null;
     var last_error_lock = std.Thread.Mutex{};
     var need_confirm_quit = false;
-
-    pub const Out = union(enum) {
-        mem: ?*model.Dir,
-        json: *JsonWriter,
-    };
 };
-
-
-pub fn setupJsonOutput(out: std.fs.File) void {
-    state.out = state.Out{ .json = JsonWriter.init(out) };
-}
 
 
 // Must be the first thing to call from a source; initializes global state.
 pub fn createThreads(num: usize) []Thread {
-    switch (state.out) {
-        .mem => {},
-        .json => |j| {
-            if (num > 1) {
-                state.out = state.Out{ .mem = null };
-                state.defer_json = j;
-            }
-        },
+    // JSON export does not support multiple threads, scan into memory first.
+    if (global.sink == .json and num > 1) {
+        global.sink = .mem;
+        mem_sink.global.stats = false;
     }
 
-    state.status = .running;
-    if (state.last_error) |p| main.allocator.free(p);
-    state.last_error = null;
-    state.threads = main.allocator.alloc(Thread, num) catch unreachable;
-    for (state.threads) |*t| t.* = .{};
-    return state.threads;
+    global.state = .running;
+    if (global.last_error) |p| main.allocator.free(p);
+    global.last_error = null;
+    global.threads = main.allocator.alloc(Thread, num) catch unreachable;
+    for (global.threads) |*t| t.* = .{};
+    return global.threads;
 }
 
 
 // Must be the last thing to call from a source.
 pub fn done() void {
-    switch (state.out) {
-        .mem => if (state.defer_json == null) {
-            state.status = .hlcnt;
-            main.handleEvent(false, true);
-            const dir = state.out.mem orelse model.root;
-            var it: ?*model.Dir = dir;
-            while (it) |p| : (it = p.parent) {
-                p.updateSubErr();
-                if (p != dir) {
-                    p.entry.pack.blocks +|= dir.entry.pack.blocks;
-                    p.entry.size +|= dir.entry.size;
-                    p.items +|= dir.items + 1;
-                }
-            }
-            model.inodes.addAllStats();
-        },
-        .json => |j| j.done(),
+    switch (global.sink) {
+        .mem => mem_sink.done(),
+        .json => json_export.done(),
     }
-    state.status = .done;
-    main.allocator.free(state.threads);
+    global.state = .done;
+    main.allocator.free(global.threads);
 
     // We scanned into memory, now we need to scan from memory to JSON
-    if (state.defer_json) |j| {
-        state.out = state.Out{ .json = j };
-        state.defer_json = null;
+    if (global.sink == .mem and !mem_sink.global.stats) {
+        global.sink = .json;
         mem_src.run(model.root);
     }
 
@@ -632,35 +261,14 @@ pub fn done() void {
 
 
 pub fn createRoot(path: []const u8, stat: *const Stat) *Dir {
-    const out = switch (state.out) {
-        .mem => |parent| sw: {
-            const p = parent orelse blk: {
-                model.root = model.Entry.create(main.allocator, .dir, main.config.extended, path).dir().?;
-                break :blk model.root;
-            };
-            state.status = .zeroing;
-            if (p.items > 10_000) main.handleEvent(false, true);
-            // Do the zeroStats() here, after the "root" entry has been
-            // stat'ed and opened, so that a fatal error on refresh won't
-            // zero-out the requested directory.
-            p.entry.zeroStats(p.parent);
-            state.status = .running;
-            p.entry.pack.blocks = stat.blocks;
-            p.entry.size = stat.size;
-            p.pack.dev = model.devices.getId(stat.dev);
-            break :sw Dir.Out{ .mem = MemDir.init(p) };
-        },
-        .json => |ctx| sw: {
-            ctx.addDir(path, stat, 0);
-            break :sw Dir.Out{ .json = .{ .wr = ctx, .dev = stat.dev } };
-        },
-    };
-
     const d = main.allocator.create(Dir) catch unreachable;
     d.* = .{
         .name = main.allocator.dupe(u8, path) catch unreachable,
         .parent = null,
-        .out = out,
+        .out = switch (global.sink) {
+            .mem => .{ .mem = mem_sink.createRoot(path, stat) },
+            .json => .{ .json = json_export.createRoot(path, stat) },
+        },
     };
     return d;
 }
@@ -686,13 +294,13 @@ fn drawConsole() void {
         st.lines_written -= 1;
     }
 
-    if (state.status == .hlcnt) {
+    if (global.state == .hlcnt) {
         wr.writeAll("Counting hardlinks...\n") catch {};
 
-    } else if (state.status == .running) {
+    } else if (global.state == .running) {
         var bytes: u64 = 0;
         var files: u64 = 0;
-        for (state.threads) |*t| {
+        for (global.threads) |*t| {
             bytes +|= t.getBytes();
             files += t.files_seen.load(.monotonic);
         }
@@ -700,7 +308,7 @@ fn drawConsole() void {
         wr.print("{} files / {s}{s}\n", .{files, r.num(), r.unit}) catch {};
         st.lines_written += 1;
 
-        for (state.threads, 0..) |*t, i| {
+        for (global.threads, 0..) |*t, i| {
             const dir = blk: {
                 t.lock.lock();
                 defer t.lock.unlock();
@@ -721,14 +329,14 @@ fn drawProgress() void {
 
     var bytes: u64 = 0;
     var files: u64 = 0;
-    for (state.threads) |*t| {
+    for (global.threads) |*t| {
         bytes +|= t.getBytes();
         files += t.files_seen.load(.monotonic);
     }
 
     ui.init();
     const width = ui.cols -| 5;
-    const numthreads: u32 = @intCast(@min(state.threads.len, @max(1, ui.rows -| 10)));
+    const numthreads: u32 = @intCast(@min(global.threads.len, @max(1, ui.rows -| 10)));
     const box = ui.Box.create(8 + numthreads, width, "Scanning...");
     box.move(2, 2);
     ui.addstr("Total items: ");
@@ -743,7 +351,7 @@ fn drawProgress() void {
     for (0..numthreads) |i| {
         box.move(3+@as(u32, @intCast(i)), 4);
         const dir = blk: {
-            const t = &state.threads[i];
+            const t = &global.threads[i];
             t.lock.lock();
             defer t.lock.unlock();
             break :blk if (t.current_dir) |d| d.path() else null;
@@ -753,9 +361,9 @@ fn drawProgress() void {
     }
 
     blk: {
-        state.last_error_lock.lock();
-        defer state.last_error_lock.unlock();
-        const err = state.last_error orelse break :blk;
+        global.last_error_lock.lock();
+        defer global.last_error_lock.unlock();
+        const err = global.last_error orelse break :blk;
         box.move(4 + numthreads, 2);
         ui.style(.bold);
         ui.addstr("Warning: ");
@@ -766,7 +374,7 @@ fn drawProgress() void {
         ui.addstr("some directory sizes may not be correct.");
     }
 
-    if (state.need_confirm_quit) {
+    if (global.need_confirm_quit) {
         box.move(6 + numthreads, width -| 20);
         ui.addstr("Press ");
         ui.style(.key);
@@ -807,7 +415,7 @@ fn drawError() void {
     box.move(2, 2);
     ui.addstr("Unable to open directory:");
     box.move(3, 4);
-    ui.addstr(ui.shorten(ui.toUtf8(state.last_error.?), width -| 10));
+    ui.addstr(ui.shorten(ui.toUtf8(global.last_error.?), width -| 10));
 
     box.move(4, width -| 27);
     ui.addstr("Press any key to continue");
@@ -826,7 +434,7 @@ pub fn draw() void {
     switch (main.config.scan_ui.?) {
         .none => {},
         .line => drawConsole(),
-        .full => switch (state.status) {
+        .full => switch (global.state) {
             .done => {},
             .err => drawError(),
             .zeroing => {
@@ -846,7 +454,7 @@ pub fn draw() void {
 
 
 pub fn keyInput(ch: i32) void {
-    switch (state.status) {
+    switch (global.state) {
         .done => {},
         .err => main.state = .browse,
         .zeroing => {},
@@ -854,11 +462,11 @@ pub fn keyInput(ch: i32) void {
         .running => {
             switch (ch) {
                 'q' => {
-                    if (main.config.confirm_quit) state.need_confirm_quit = !state.need_confirm_quit
+                    if (main.config.confirm_quit) global.need_confirm_quit = !global.need_confirm_quit
                    else ui.quit();
                 },
-                'y', 'Y' => if (state.need_confirm_quit) ui.quit(),
-                else => state.need_confirm_quit = false,
+                'y', 'Y' => if (global.need_confirm_quit) ui.quit(),
+                else => global.need_confirm_quit = false,
             }
         },
     }
