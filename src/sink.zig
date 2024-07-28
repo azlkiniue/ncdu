@@ -295,7 +295,11 @@ fn drawConsole() void {
     }
 
     if (global.state == .hlcnt) {
-        wr.writeAll("Counting hardlinks...\n") catch {};
+        wr.writeAll("Counting hardlinks...") catch {};
+        if (model.inodes.add_total > 0)
+            wr.print(" {} / {}", .{ model.inodes.add_done, model.inodes.add_total }) catch {};
+        wr.writeByte('\n') catch {};
+        st.lines_written += 1;
 
     } else if (global.state == .running) {
         var bytes: u64 = 0;
@@ -445,7 +449,12 @@ pub fn draw() void {
             .hlcnt => {
                 const box = ui.Box.create(4, ui.cols -| 5, "Finalizing");
                 box.move(2, 2);
-                ui.addstr("Counting hardlinks...");
+                ui.addstr("Counting hardlinks... ");
+                if (model.inodes.add_total > 0) {
+                    ui.addnum(.default, model.inodes.add_done);
+                    ui.addstr(" / ");
+                    ui.addnum(.default, model.inodes.add_total);
+                }
             },
             .running => drawProgress(),
         },

@@ -456,7 +456,7 @@ fn item(ctx: *Ctx, parent: ?*sink.Dir, dev: u64) void {
         parent.?.addStat(ctx.sink, name, &ctx.stat);
     }
 
-    if ((ctx.sink.files_seen.load(.monotonic) & 1024) == 0)
+    if ((ctx.sink.files_seen.load(.monotonic) & 65) == 0)
         main.handleEvent(false, false);
 }
 

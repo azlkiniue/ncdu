@@ -417,13 +417,29 @@ pub const inodes = struct {
         }
     }
 
+    // counters to track progress for addAllStats()
+    pub var add_total: usize = 0;
+    pub var add_done: usize = 0;
+
     pub fn addAllStats() void {
         if (uncounted_full) {
+            add_total = map.count();
+            add_done = 0;
             var it = map.keyIterator();
-            while (it.next()) |e| setStats(e.*, true);
+            while (it.next()) |e| {
+                setStats(e.*, true);
+                add_done += 1;
+                if ((add_done & 65) == 0) main.handleEvent(false, false);
+            }
         } else {
+            add_total = uncounted.count();
+            add_done = 0;
             var it = uncounted.keyIterator();
-            while (it.next()) |u| if (map.getKey(u.*)) |e| setStats(e, true);
+            while (it.next()) |u| {
+                if (map.getKey(u.*)) |e| setStats(e, true);
+                add_done += 1;
+                if ((add_done & 65) == 0) main.handleEvent(false, false);
+            }
         }
         uncounted_full = false;
         if (uncounted.count() > 0)

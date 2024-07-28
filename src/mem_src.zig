@@ -35,7 +35,7 @@ const Ctx = struct {
 
 
 fn rec(ctx: *Ctx, dir: *sink.Dir, entry: *model.Entry) void {
-    if ((ctx.sink.files_seen.load(.monotonic) & 1024) == 0)
+    if ((ctx.sink.files_seen.load(.monotonic) & 65) == 0)
         main.handleEvent(false, false);
 
     ctx.stat = toStat(entry);
