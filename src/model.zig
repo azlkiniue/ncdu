@@ -238,7 +238,7 @@ pub const Link = extern struct {
             l.next = l;
             l.prev = l;
         } else {
-            inodes.setStats(l, false);
+            inodes.setStats(d.key_ptr.*, false);
             l.next = d.key_ptr.*;
             l.prev = d.key_ptr.*.prev;
             l.next.prev = l;
