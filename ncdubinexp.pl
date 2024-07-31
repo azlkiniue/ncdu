@@ -62,7 +62,6 @@ my @itemkeys = qw/
     sub
     ino
     nlink
-    prevlnk
     uid
     gid
     mode
@@ -218,8 +217,6 @@ sub traverse($parent, $path) {
 
     my($noref) = grep !$_->{_lastseen}, values %items;
     die sprintf "No reference found to #%010x\n", $noref->{_itemref} if $noref;
-
-    # TODO: Verify 'link' references
 }
 
 if ($printstats) {

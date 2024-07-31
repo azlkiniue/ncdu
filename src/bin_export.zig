@@ -18,8 +18,6 @@ pub const global = struct {
     var file_off: u64 = 0;
     var lock: std.Thread.Mutex = .{};
     var root_itemref: u64 = 0;
-    // TODO:
-    // var links: Map dev -> ino -> (last_offset, size, blocks, nlink)
 };
 
 const BLOCK_SIZE: usize = 512*1024; // XXX: Current maximum for benchmarking, should just stick with a fixed block size.
@@ -55,12 +53,11 @@ const ItemKey = enum(u5) {
     // Only for .link
     ino     = 13, // u64
     nlink   = 14, // u32
-    prevlnk = 15, // itemref
     // Extended mode
-    uid   = 16, // u32
-    gid   = 17, // u32
-    mode  = 18, // u16
-    mtime = 19, // u64
+    uid   = 15, // u32
+    gid   = 16, // u32
+    mode  = 17, // u16
+    mtime = 18, // u64
 };
 
 // Pessimistic upper bound on the encoded size of an item, excluding the name field.
@@ -251,9 +248,18 @@ pub const Dir = struct {
     blocks: u64 = 0,
     err: bool = false,
     suberr: bool = false,
-    // TODO: set of links
-    //shared_size: u64,
-    //shared_blocks: u64,
+    shared_size: u64 = 0,
+    shared_blocks: u64 = 0,
+    inodes: Inodes = Inodes.init(main.allocator),
+
+    const Inodes = std.AutoHashMap(u64, Inode);
+    const Inode = struct {
+        size: u64,
+        blocks: u64,
+        nlink: u32,
+        nfound: u32,
+    };
+
 
     pub fn addSpecial(d: *Dir, t: *Thread, name: []const u8, sp: sink.Special) void {
         d.lock.lock();
@@ -284,7 +290,21 @@ pub const Dir = struct {
         t.cborHead(.pos, stat.size);
         t.itemKey(.dsize);
         t.cborHead(.pos, util.blocksToSize(stat.blocks));
-        // TODO: hardlink stuff
+
+        if (stat.hlinkc) {
+            const lnk = d.inodes.getOrPut(stat.ino) catch unreachable;
+            if (!lnk.found_existing) lnk.value_ptr.* = .{
+                .size = stat.size,
+                .blocks = stat.blocks,
+                .nlink = stat.nlink,
+                .nfound = 1,
+            } else lnk.value_ptr.nfound += 1;
+            t.itemKey(.ino);
+            t.cborHead(.pos, stat.ino);
+            t.itemKey(.nlink);
+            t.cborHead(.pos, stat.nlink);
+        }
+
         t.itemExt(stat);
         t.itemEnd();
     }
@@ -304,20 +324,80 @@ pub const Dir = struct {
         d.err = true;
     }
 
+    // XXX: older JSON exports did not include the nlink count and have
+    // this field set to '0'.  We can deal with that when importing to
+    // mem_sink, but the hardlink counting algorithm used here really does need
+    // that information. Current code makes sure to count such links only once
+    // per dir, but does not count them towards the shared_* fields. That
+    // behavior is similar to ncdu 1.x, but the difference between memory
+    // import and this file export might be surprising.
+    fn countLinks(d: *Dir, parent: ?*Dir) void {
+        var parent_new: u32 = 0;
+        var it = d.inodes.iterator();
+        while (it.next()) |kv| {
+            const v = kv.value_ptr;
+            d.size +|= v.size;
+            d.blocks +|= v.blocks;
+            if (v.nlink > 1 and v.nfound <= v.nlink) {
+                d.shared_size +|= v.size;
+                d.shared_blocks +|= v.blocks;
+            }
+
+            const p = parent orelse continue;
+            // All contained in this dir, no need to keep this entry around
+            if (v.nlink > 0 and v.nfound >= v.nlink) {
+                p.size +|= v.size;
+                p.blocks +|= v.blocks;
+                _ = d.inodes.remove(kv.key_ptr.*);
+            } else if (!p.inodes.contains(kv.key_ptr.*))
+                parent_new += 1;
+        }
+
+        // Merge remaining inodes into parent
+        const p = parent orelse return;
+        if (d.inodes.count() == 0) return;
+
+        // If parent is empty, just transfer
+        if (p.inodes.count() == 0) {
+            p.inodes.deinit();
+            p.inodes = d.inodes;
+            d.inodes = Inodes.init(main.allocator); // So we can deinit() without affecting parent
+        // Otherwise, merge
+        } else {
+            p.inodes.ensureUnusedCapacity(parent_new) catch unreachable;
+            it = d.inodes.iterator();
+            while (it.next()) |kv| {
+                const v = kv.value_ptr;
+                const plnk = p.inodes.getOrPutAssumeCapacity(kv.key_ptr.*);
+                if (!plnk.found_existing) plnk.value_ptr.* = v.*
+                else plnk.value_ptr.*.nfound += v.nfound;
+            }
+        }
+    }
+
     pub fn final(d: *Dir, t: *Thread, name: []const u8, parent: ?*Dir) void {
         if (parent) |p| p.lock.lock();
         defer if (parent) |p| p.lock.unlock();
 
-        // TODO: hardlink stuff
         if (parent) |p| {
+            // Different dev? Don't merge the 'inodes' sets, just count the
+            // links here first so the sizes get added to the parent.
+            if (p.stat.dev != d.stat.dev) d.countLinks(null);
+
             p.items += d.items;
             p.size +|= d.size;
             p.blocks +|= d.blocks;
             if (d.suberr or d.err) p.suberr = true;
 
+            // Same dir, merge inodes
+            if (p.stat.dev == d.stat.dev) d.countLinks(p);
+
             p.last_sub = t.itemStart(.dir, p.last_sub, name);
-        } else
+        } else {
+            d.countLinks(null);
             global.root_itemref = t.itemStart(.dir, 0, name);
+        }
+        d.inodes.deinit();
 
         t.itemKey(.asize);
         t.cborHead(.pos, d.stat.size);
@@ -332,9 +412,17 @@ pub const Dir = struct {
             t.cborHead(.simple, if (d.err) 21 else 20);
         }
         t.itemKey(.cumasize);
-        t.cborHead(.pos, d.size);
+        t.cborHead(.pos, d.size +| d.stat.size);
         t.itemKey(.cumdsize);
-        t.cborHead(.pos, util.blocksToSize(d.blocks));
+        t.cborHead(.pos, util.blocksToSize(d.blocks +| d.stat.blocks));
+        if (d.shared_size > 0) {
+            t.itemKey(.shrasize);
+            t.cborHead(.pos, d.shared_size);
+        }
+        if (d.shared_blocks > 0) {
+            t.itemKey(.shrdsize);
+            t.cborHead(.pos, util.blocksToSize(d.shared_blocks));
+        }
         t.itemKey(.items);
         t.cborHead(.pos, d.items);
         t.itemRef(.sub, d.last_sub);
