@@ -6,6 +6,11 @@ const main = @import("main.zig");
 const sink = @import("sink.zig");
 const util = @import("util.zig");
 const ui = @import("ui.zig");
+const c = @cImport({
+    @cInclude("zlib.h");
+    @cInclude("zstd.h");
+    @cInclude("lz4.h");
+});
 
 pub const global = struct {
     var fd: std.fs.File = undefined;
@@ -17,7 +22,7 @@ pub const global = struct {
     // var links: Map dev -> ino -> (last_offset, size, blocks, nlink)
 };
 
-const BLOCK_SIZE: usize = 64*1024;
+const BLOCK_SIZE: usize = 512*1024; // XXX: Current maximum for benchmarking, should just stick with a fixed block size.
 
 const ItemType = enum(i3) {
     dir = 0,
@@ -59,7 +64,7 @@ const ItemKey = enum(u5) {
 };
 
 // Pessimistic upper bound on the encoded size of an item, excluding the name field.
-// 2 bytes for map start/end, 10 per field (2 for the key, 9 for a full u64).
+// 2 bytes for map start/end, 11 per field (2 for the key, 9 for a full u64).
 const MAX_ITEM_LEN = 2 + 11 * @typeInfo(ItemKey).Enum.fields.len;
 
 const CborMajor = enum(u3) { pos, neg, bytes, text, array, map, tag, simple };
@@ -79,19 +84,48 @@ pub const Thread = struct {
     block_num: u32 = std.math.maxInt(u32),
     itemref: u64 = 0, // ref of item currently being written
 
-    // Temporary buffer for headers and compression
+    // Temporary buffer for headers and compression.
+    // TODO: check with compressBound()/ZSTD_compressBound()
     tmp: [BLOCK_SIZE+128]u8 = undefined,
+
+    fn compressNone(in: []const u8, out: []u8) usize {
+        @memcpy(out[0..in.len], in);
+        return in.len;
+    }
+
+    fn compressZlib(in: []const u8, out: []u8) usize {
+        var outlen: c.uLongf = out.len;
+        const r = c.compress2(out.ptr, &outlen, in.ptr, in.len, main.config.complevel);
+        std.debug.assert(r == c.Z_OK);
+        return outlen;
+    }
+
+    fn compressZstd(in: []const u8, out: []u8) usize {
+        const r = c.ZSTD_compress(out.ptr, out.len, in.ptr, in.len, main.config.complevel);
+        std.debug.assert(c.ZSTD_isError(r) == 0);
+        return r;
+    }
+
+    fn compressLZ4(in: []const u8, out: []u8) usize {
+        const r = c.LZ4_compress_default(in.ptr, out.ptr, @intCast(in.len), @intCast(out.len));
+        std.debug.assert(r > 0);
+        return @intCast(r);
+    }
 
     fn createBlock(t: *Thread) []const u8 {
         if (t.block_num == std.math.maxInt(u32) or t.off <= 1) return "";
 
-        // TODO: Compression
-        const blocklen: u32 = @intCast(t.off + 16);
+        const bodylen = switch (main.config.compression) {
+            .none => compressNone(t.buf[0..t.off], t.tmp[12..]),
+            .zlib => compressZlib(t.buf[0..t.off], t.tmp[12..]),
+            .zstd => compressZstd(t.buf[0..t.off], t.tmp[12..]),
+            .lz4 => compressLZ4(t.buf[0..t.off], t.tmp[12..]),
+        };
+        const blocklen: u32 = @intCast(bodylen + 16);
         t.tmp[0..4].* = blockHeader(1, blocklen);
         t.tmp[4..8].* = bigu32(t.block_num);
         t.tmp[8..12].* = bigu32(@intCast(t.off));
-        @memcpy(t.tmp[12..][0..t.off], t.buf[0..t.off]);
-        t.tmp[12+t.off..][0..4].* = blockHeader(1, blocklen);
+        t.tmp[12+bodylen..][0..4].* = blockHeader(1, blocklen);
         return t.tmp[0..blocklen];
     }
 
@@ -164,7 +198,7 @@ pub const Thread = struct {
     // Reserve space for a new item, write out the type, prev and name fields and return the itemref.
     fn itemStart(t: *Thread, itype: ItemType, prev_item: u64, name: []const u8) u64 {
         const min_len = name.len + MAX_ITEM_LEN;
-        if (t.off + min_len > t.buf.len) t.flush(min_len);
+        if (t.off + min_len > main.config.blocksize) t.flush(min_len);
 
         t.itemref = (@as(u64, t.block_num) << 24) | t.off;
         t.cborIndef(.map);

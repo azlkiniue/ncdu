@@ -70,6 +70,9 @@ pub const config = struct {
     pub var exclude_kernfs: bool = false;
     pub var exclude_patterns: std.ArrayList([:0]const u8) = std.ArrayList([:0]const u8).init(allocator);
     pub var threads: usize = 1;
+    pub var compression: enum { none, zlib, zstd, lz4 } = .none;
+    pub var complevel: u8 = 5;
+    pub var blocksize: usize = 64*1024;
 
     pub var update_delay: u64 = 100*std.time.ns_per_ms;
     pub var scan_ui: ?enum { none, line, full } = null;
@@ -502,7 +505,17 @@ pub fn main() void {
             else if (opt.is("-f")) import_file = allocator.dupeZ(u8, args.arg()) catch unreachable
             else if (opt.is("--ignore-config")) {}
             else if (opt.is("--quit-after-scan")) quit_after_scan = true // undocumented feature to help with benchmarking scan/import
-            else if (argConfig(&args, opt)) {}
+            else if (opt.is("--binfmt")) { // Experimental, for benchmarking
+                const a = args.arg();
+                config.compression = switch (a[0]) {
+                    'z' => .zlib,
+                    's','S' => .zstd,
+                    'l' => .lz4,
+                    else => .none,
+                };
+                config.complevel = (a[1] - '0') + (if (a[0] == 'S') @as(u8, 10) else 0);
+                config.blocksize = @as(usize, 8*1024) << @intCast(a[2] - '0'); // 0 = 8k, 1 16k, 2 32k, 3 64k, 4 128k, 5 256k, 6 512k
+            } else if (argConfig(&args, opt)) {}
             else ui.die("Unrecognized option '{s}'.\n", .{opt.val});
         }
     }
