@@ -54,18 +54,20 @@ fn truncate(comptime T: type, comptime field: anytype, x: anytype) std.meta.fiel
 }
 
 
-fn statAt(parent: std.fs.Dir, name: [:0]const u8, follow: bool) !sink.Stat {
+fn statAt(parent: std.fs.Dir, name: [:0]const u8, follow: bool, symlink: *bool) !sink.Stat {
     const stat = try std.posix.fstatatZ(parent.fd, name, if (follow) 0 else std.posix.AT.SYMLINK_NOFOLLOW);
+    symlink.* = std.posix.S.ISLNK(stat.mode);
     return sink.Stat{
+        .etype =
+            if (std.posix.S.ISDIR(stat.mode)) .dir
+            else if (stat.nlink > 1) .link
+            else if (!std.posix.S.ISREG(stat.mode)) .nonreg
+            else .reg,
         .blocks = clamp(sink.Stat, .blocks, stat.blocks),
         .size = clamp(sink.Stat, .size, stat.size),
         .dev = truncate(sink.Stat, .dev, stat.dev),
         .ino = truncate(sink.Stat, .ino, stat.ino),
         .nlink = clamp(sink.Stat, .nlink, stat.nlink),
-        .hlinkc = stat.nlink > 1 and !std.posix.S.ISDIR(stat.mode),
-        .dir = std.posix.S.ISDIR(stat.mode),
-        .reg = std.posix.S.ISREG(stat.mode),
-        .symlink = std.posix.S.ISLNK(stat.mode),
         .ext = .{
             .mtime = clamp(model.Ext, .mtime, stat.mtime().tv_sec),
             .uid = truncate(model.Ext, .uid, stat.uid),
@@ -190,23 +192,24 @@ const Thread = struct {
 
         const excluded = dir.pat.match(name);
         if (excluded == false) { // matched either a file or directory, so we can exclude this before stat()ing.
-            dir.sink.addSpecial(t.sink, name, .excluded);
+            dir.sink.addSpecial(t.sink, name, .pattern);
             return;
         }
 
-        var stat = statAt(dir.fd, name, false) catch {
+        var symlink: bool = undefined;
+        var stat = statAt(dir.fd, name, false, &symlink) catch {
             dir.sink.addSpecial(t.sink, name, .err);
             return;
         };
 
-        if (main.config.follow_symlinks and stat.symlink) {
-            if (statAt(dir.fd, name, true)) |nstat| {
-                if (!nstat.dir) {
+        if (main.config.follow_symlinks and symlink) {
+            if (statAt(dir.fd, name, true, &symlink)) |nstat| {
+                if (nstat.etype != .dir) {
                     stat = nstat;
                     // Symlink targets may reside on different filesystems,
                     // this will break hardlink detection and counting so let's disable it.
-                    if (stat.hlinkc and stat.dev != dir.dev) {
-                        stat.hlinkc = false;
+                    if (stat.etype == .link and stat.dev != dir.dev) {
+                        stat.etype = .reg;
                         stat.nlink = 1;
                     }
                 }
@@ -214,17 +217,17 @@ const Thread = struct {
         }
 
         if (main.config.same_fs and stat.dev != dir.dev) {
-            dir.sink.addSpecial(t.sink, name, .other_fs);
+            dir.sink.addSpecial(t.sink, name, .otherfs);
             return;
         }
 
-        if (!stat.dir) {
+        if (stat.etype != .dir) {
             dir.sink.addStat(t.sink, name, &stat);
             return;
         }
 
         if (excluded == true) {
-            dir.sink.addSpecial(t.sink, name, .excluded);
+            dir.sink.addSpecial(t.sink, name, .pattern);
             return;
         }
 
@@ -246,7 +249,7 @@ const Thread = struct {
         }
 
         if (main.config.exclude_caches and isCacheDir(edir)) {
-            dir.sink.addSpecial(t.sink, name, .excluded);
+            dir.sink.addSpecial(t.sink, name, .pattern);
             edir.close();
             return;
         }
@@ -287,7 +290,8 @@ pub fn scan(path: [:0]const u8) !void {
     const sink_threads = sink.createThreads(main.config.threads);
     defer sink.done();
 
-    const stat = try statAt(std.fs.cwd(), path, true);
+    var symlink: bool = undefined;
+    const stat = try statAt(std.fs.cwd(), path, true, &symlink);
     const fd = try std.fs.cwd().openDirZ(path, .{ .iterate = true });
 
     var state = State{

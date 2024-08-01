@@ -78,8 +78,8 @@ fn sortLt(_: void, ap: ?*model.Entry, bp: ?*model.Entry) bool {
     const a = ap.?;
     const b = bp.?;
 
-    if (main.config.sort_dirsfirst and a.isDirectory() != b.isDirectory())
-        return a.isDirectory();
+    if (main.config.sort_dirsfirst and a.pack.etype.isDirectory() != b.pack.etype.isDirectory())
+        return a.pack.etype.isDirectory();
 
     switch (main.config.sort_col) {
         .name => {}, // name sorting is the fallback
@@ -139,7 +139,10 @@ pub fn loadDir(next_sel: ?*const model.Entry) void {
         if (e.pack.blocks > dir_max_blocks) dir_max_blocks = e.pack.blocks;
         if (e.size > dir_max_size) dir_max_size = e.size;
         const shown = main.config.show_hidden or blk: {
-            const excl = if (e.file()) |f| f.pack.excluded else false;
+            const excl = switch (e.pack.etype) {
+                .pattern, .otherfs, .kernfs => true,
+                else => false,
+            };
             const name = e.name();
             break :blk !excl and name[0] != '.' and name[name.len-1] != '~';
         };
@@ -162,19 +165,17 @@ const Row = struct {
     fn flag(self: *Self) void {
         defer self.col += 2;
         const item = self.item orelse return;
-        const ch: u7 = ch: {
-            if (item.file()) |f| {
-                if (f.pack.err) break :ch '!';
-                if (f.pack.excluded) break :ch '<';
-                if (f.pack.other_fs) break :ch '>';
-                if (f.pack.kernfs) break :ch '^';
-                if (f.pack.notreg) break :ch '@';
-            } else if (item.dir()) |d| {
-                if (d.pack.err) break :ch '!';
-                if (d.pack.suberr) break :ch '.';
-                if (d.sub == null) break :ch 'e';
-            } else if (item.link()) |_| break :ch 'H';
-            return;
+        const ch: u7 = switch (item.pack.etype) {
+            .dir => if (item.dir().?.pack.err) '!'
+                    else if (item.dir().?.pack.suberr) '.'
+                    else if (item.dir().?.sub == null) 'e'
+                    else return,
+            .link => 'H',
+            .pattern => '<',
+            .otherfs => '>',
+            .kernfs => '^',
+            .nonreg => '@',
+            else => return,
         };
         ui.move(self.row, self.col);
         self.bg.fg(.flag);
@@ -291,7 +292,7 @@ const Row = struct {
         ui.move(self.row, self.col);
         if (self.item) |i| {
             self.bg.fg(if (i.pack.etype == .dir) .dir else .default);
-            ui.addch(if (i.isDirectory()) '/' else ' ');
+            ui.addch(if (i.pack.etype.isDirectory()) '/' else ' ');
             ui.addstr(ui.shorten(ui.toUtf8(i.name()), ui.cols -| self.col -| 1));
         } else {
             self.bg.fg(.dir);
@@ -456,7 +457,12 @@ const info = struct {
         } else {
             ui.addstr("Type: ");
             ui.style(.default);
-            ui.addstr(if (e.isDirectory()) "Directory" else if (if (e.file()) |f| f.pack.notreg else false) "Other" else "File");
+            ui.addstr(switch (e.pack.etype) {
+                .dir => "Directory",
+                .nonreg => "Other",
+                .reg, .link => "File",
+                else => "Excluded",
+            });
         }
         row.* += 1;
 

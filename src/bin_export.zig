@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const main = @import("main.zig");
+const model = @import("model.zig");
 const sink = @import("sink.zig");
 const util = @import("util.zig");
 const ui = @import("ui.zig");
@@ -22,20 +23,9 @@ pub const global = struct {
 
 const BLOCK_SIZE: usize = 512*1024; // XXX: Current maximum for benchmarking, should just stick with a fixed block size.
 
-const ItemType = enum(i3) {
-    dir = 0,
-    reg = 1,
-    nonreg = 2,
-    link = 3,
-    err = -1,
-    pattern = -2,
-    otherfs = -3,
-    kernfs = -4
-};
-
 const ItemKey = enum(u5) {
     // all items
-    type = 0, // ItemType
+    type = 0, // EType
     name = 1, // bytes
     prev = 2, // itemref
     // Only for non-specials
@@ -193,7 +183,7 @@ pub const Thread = struct {
     }
 
     // Reserve space for a new item, write out the type, prev and name fields and return the itemref.
-    fn itemStart(t: *Thread, itype: ItemType, prev_item: u64, name: []const u8) u64 {
+    fn itemStart(t: *Thread, itype: model.EType, prev_item: u64, name: []const u8) u64 {
         const min_len = name.len + MAX_ITEM_LEN;
         if (t.off + min_len > main.config.blocksize) t.flush(min_len);
 
@@ -261,18 +251,12 @@ pub const Dir = struct {
     };
 
 
-    pub fn addSpecial(d: *Dir, t: *Thread, name: []const u8, sp: sink.Special) void {
+    pub fn addSpecial(d: *Dir, t: *Thread, name: []const u8, sp: model.EType) void {
         d.lock.lock();
         defer d.lock.unlock();
         d.items += 1;
         if (sp == .err) d.suberr = true;
-        const it: ItemType = switch (sp) {
-            .err => .err,
-            .other_fs => .otherfs,
-            .kernfs => .kernfs,
-            .excluded => .pattern,
-        };
-        d.last_sub = t.itemStart(it, d.last_sub, name);
+        d.last_sub = t.itemStart(sp, d.last_sub, name);
         t.itemEnd();
     }
 
@@ -280,18 +264,17 @@ pub const Dir = struct {
         d.lock.lock();
         defer d.lock.unlock();
         d.items += 1;
-        if (!stat.hlinkc) {
+        if (stat.etype != .link) {
             d.size +|= stat.size;
             d.blocks +|= stat.blocks;
         }
-        const it: ItemType = if (stat.hlinkc) .link else if (stat.reg) .reg else .nonreg;
-        d.last_sub = t.itemStart(it, d.last_sub, name);
+        d.last_sub = t.itemStart(stat.etype, d.last_sub, name);
         t.itemKey(.asize);
         t.cborHead(.pos, stat.size);
         t.itemKey(.dsize);
         t.cborHead(.pos, util.blocksToSize(stat.blocks));
 
-        if (stat.hlinkc) {
+        if (stat.etype == .link) {
             const lnk = d.inodes.getOrPut(stat.ino) catch unreachable;
             if (!lnk.found_existing) lnk.value_ptr.* = .{
                 .size = stat.size,

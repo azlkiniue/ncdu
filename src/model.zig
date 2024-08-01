@@ -6,10 +6,36 @@ const main = @import("main.zig");
 const ui = @import("ui.zig");
 const util = @import("util.zig");
 
-pub const EType = enum(u2) { dir, link, file };
+// Numbers are used in the binfmt export, so must be stable.
+pub const EType = enum(i3) {
+    dir = 0,
+    reg = 1,
+    nonreg = 2,
+    link = 3,
+    err = -1,
+    pattern = -2,
+    otherfs = -3,
+    kernfs = -4,
+
+    pub fn base(t: EType) EType {
+        return switch (t) {
+            .dir, .link => t,
+            else => .reg,
+        };
+    }
+
+    // Whether this entry should be displayed as a "directory".
+    // Some dirs are actually represented in this data model as a File for efficiency.
+    pub fn isDirectory(t: EType) bool {
+        return switch (t) {
+            .dir, .otherfs, .kernfs => true,
+            else => false,
+        };
+    }
+};
 
 // Type for the Entry.Packed.blocks field. Smaller than a u64 to make room for flags.
-pub const Blocks = u61;
+pub const Blocks = u60;
 
 // Memory layout:
 //      (Ext +) Dir + name
@@ -44,20 +70,14 @@ pub const Entry = extern struct {
     }
 
     pub fn file(self: *Self) ?*File {
-        return if (self.pack.etype == .file) @ptrCast(self) else null;
-    }
-
-    // Whether this entry should be displayed as a "directory".
-    // Some dirs are actually represented in this data model as a File for efficiency.
-    pub fn isDirectory(self: *Self) bool {
-        return if (self.file()) |f| f.pack.other_fs or f.pack.kernfs else self.pack.etype == .dir;
+        return if (self.pack.etype != .dir and self.pack.etype != .link) @ptrCast(self) else null;
     }
 
     pub fn name(self: *const Self) [:0]const u8 {
         const self_name = switch (self.pack.etype) {
             .dir => &@as(*const Dir, @ptrCast(self)).name,
             .link => &@as(*const Link, @ptrCast(self)).name,
-            .file => &@as(*const File, @ptrCast(self)).name,
+            else => &@as(*const File, @ptrCast(self)).name,
         };
         const name_ptr: [*:0]const u8 = @ptrCast(self_name);
         return std.mem.sliceTo(name_ptr, 0);
@@ -90,16 +110,15 @@ pub const Entry = extern struct {
     pub fn create(allocator: std.mem.Allocator, etype: EType, isext: bool, ename: []const u8) *Entry {
         return switch (etype) {
             .dir  => alloc(Dir, allocator, etype, isext, ename),
-            .file => alloc(File, allocator, etype, isext, ename),
             .link => alloc(Link, allocator, etype, isext, ename),
+            else => alloc(File, allocator, etype, isext, ename),
         };
     }
 
     fn hasErr(self: *Self) bool {
         return
-            if (self.file()) |f| f.pack.err
-            else if (self.dir()) |d| d.pack.err or d.pack.suberr
-            else false;
+            if(self.dir()) |d| d.pack.err or d.pack.suberr
+            else self.pack.etype == .err;
     }
 
     fn removeLinks(self: *Entry) void {
@@ -113,7 +132,6 @@ pub const Entry = extern struct {
     fn zeroStatsRec(self: *Entry) void {
         self.pack.blocks = 0;
         self.size = 0;
-        if (self.file()) |f| f.pack = .{};
         if (self.dir()) |d| {
             d.items = 0;
             d.pack.err = false;
@@ -274,17 +292,7 @@ pub const Link = extern struct {
 // Anything that's not an (indexed) directory or hardlink. Excluded directories are also "Files".
 pub const File = extern struct {
     entry: Entry,
-    pack: Packed = .{},
     name: [0]u8 = undefined,
-
-    pub const Packed = packed struct(u8) {
-        err: bool = false,
-        excluded: bool = false,
-        other_fs: bool = false,
-        kernfs: bool = false,
-        notreg: bool = false,
-        _pad: u3 = 0, // Make this struct "ABI sized" to allow inclusion in an extern struct
-    };
 };
 
 pub const Ext = extern struct {

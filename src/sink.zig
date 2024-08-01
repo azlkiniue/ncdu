@@ -55,19 +55,14 @@ const util = @import("util.zig");
 
 // Concise stat struct for fields we're interested in, with the types used by the model.
 pub const Stat = struct {
+    etype: model.EType = .reg,
     blocks: model.Blocks = 0,
     size: u64 = 0,
     dev: u64 = 0,
     ino: u64 = 0,
     nlink: u31 = 0,
-    hlinkc: bool = false,
-    dir: bool = false,
-    reg: bool = true,
-    symlink: bool = false,
     ext: model.Ext = .{},
 };
-
-pub const Special = enum { err, other_fs, kernfs, excluded };
 
 
 pub const Dir = struct {
@@ -82,7 +77,8 @@ pub const Dir = struct {
         bin: bin_export.Dir,
     };
 
-    pub fn addSpecial(d: *Dir, t: *Thread, name: []const u8, sp: Special) void {
+    pub fn addSpecial(d: *Dir, t: *Thread, name: []const u8, sp: model.EType) void {
+        std.debug.assert(@intFromEnum(sp) < 0); // >=0 aren't "special"
         _ = t.files_seen.fetchAdd(1, .monotonic);
         switch (d.out) {
             .mem => |*m| m.addSpecial(&t.sink.mem, name, sp),
@@ -102,7 +98,7 @@ pub const Dir = struct {
     pub fn addStat(d: *Dir, t: *Thread, name: []const u8, stat: *const Stat) void {
         _ = t.files_seen.fetchAdd(1, .monotonic);
         _ = t.addBytes((stat.blocks *| 512) / @max(1, stat.nlink));
-        std.debug.assert(!stat.dir);
+        std.debug.assert(stat.etype != .dir);
         switch (d.out) {
             .mem => |*m| _ = m.addStat(&t.sink.mem, name, stat),
             .json => |*j| j.addStat(name, stat),
@@ -113,7 +109,7 @@ pub const Dir = struct {
     pub fn addDir(d: *Dir, t: *Thread, name: []const u8, stat: *const Stat) *Dir {
         _ = t.files_seen.fetchAdd(1, .monotonic);
         _ = t.addBytes(stat.blocks *| 512);
-        std.debug.assert(stat.dir);
+        std.debug.assert(stat.etype == .dir);
         std.debug.assert(d.out != .json or d.refcnt.load(.monotonic) == 1);
 
         const s = main.allocator.create(Dir) catch unreachable;

@@ -75,7 +75,8 @@ pub const Dir = struct {
     fn getEntry(self: *Dir, t: *Thread, etype: model.EType, isext: bool, name: []const u8) *model.Entry {
         if (self.entries.getKeyAdapted(name, HashContextAdapted{})) |e| {
             // XXX: In-place conversion may be possible in some cases.
-            if (e.pack.etype == etype and (!isext or e.pack.isext)) {
+            if (e.pack.etype.base() == etype.base() and (!isext or e.pack.isext)) {
+                e.pack.etype = etype;
                 e.pack.isext = isext;
                 _ = self.entries.removeAdapted(name, HashContextAdapted{});
                 return e;
@@ -87,23 +88,16 @@ pub const Dir = struct {
         return e;
     }
 
-    pub fn addSpecial(self: *Dir, t: *Thread, name: []const u8, st: sink.Special) void {
+    pub fn addSpecial(self: *Dir, t: *Thread, name: []const u8, st: model.EType) void {
         self.dir.items += 1;
         if (st == .err) self.dir.pack.suberr = true;
-
-        const e = self.getEntry(t, .file, false, name);
-        e.file().?.pack = switch (st) {
-            .err => .{ .err = true },
-            .other_fs => .{ .other_fs = true },
-            .kernfs => .{ .kernfs = true },
-            .excluded => .{ .excluded = true },
-        };
+        _ = self.getEntry(t, st, false, name);
     }
 
     pub fn addStat(self: *Dir, t: *Thread, name: []const u8, stat: *const sink.Stat) *model.Entry {
         if (global.stats) {
             self.dir.items +|= 1;
-            if (!stat.hlinkc) {
+            if (stat.etype != .link) {
                 self.dir.entry.pack.blocks +|= stat.blocks;
                 self.dir.entry.size +|= stat.size;
             }
@@ -112,17 +106,13 @@ pub const Dir = struct {
             }
         }
 
-        const etype = if (stat.dir) model.EType.dir
-                      else if (stat.hlinkc) model.EType.link
-                      else model.EType.file;
-        const e = self.getEntry(t, etype, main.config.extended, name);
+        const e = self.getEntry(t, stat.etype, main.config.extended, name);
         e.pack.blocks = stat.blocks;
         e.size = stat.size;
         if (e.dir()) |d| {
             d.parent = self.dir;
             d.pack.dev = model.devices.getId(stat.dev);
         }
-        if (e.file()) |f| f.pack = .{ .notreg = !stat.dir and !stat.reg };
         if (e.link()) |l| {
             l.parent = self.dir;
             l.ino = stat.ino;

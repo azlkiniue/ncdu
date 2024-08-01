@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const main = @import("main.zig");
+const model = @import("model.zig");
 const sink = @import("sink.zig");
 const util = @import("util.zig");
 const ui = @import("ui.zig");
@@ -110,28 +111,24 @@ pub const Writer = struct {
         }
     }
 
-    fn writeSpecial(ctx: *Writer, name: []const u8, t: sink.Special) void {
+    fn writeSpecial(ctx: *Writer, name: []const u8, t: model.EType) void {
         ctx.closeDirEntry(false);
         ctx.ensureSpace(name.len*6 + 1000);
-        // not necessarily correct, but mimics model.Entry.isDirectory()
-        const isdir = switch (t) {
-            .other_fs, .kernfs => true,
-            .err, .excluded => false,
-        };
-        ctx.write(if (isdir) ",\n[{\"name\":\"" else ",\n{\"name\":\"");
+        ctx.write(if (t.isDirectory()) ",\n[{\"name\":\"" else ",\n{\"name\":\"");
         ctx.writeStr(name);
         ctx.write(switch (t) {
             .err => "\",\"read_error\":true}",
-            .other_fs => "\",\"excluded\":\"otherfs\"}",
+            .otherfs => "\",\"excluded\":\"otherfs\"}",
             .kernfs => "\",\"excluded\":\"kernfs\"}",
-            .excluded => "\",\"excluded\":\"pattern\"}",
+            .pattern => "\",\"excluded\":\"pattern\"}",
+            else => unreachable,
         });
-        if (isdir) ctx.writeByte(']');
+        if (t.isDirectory()) ctx.writeByte(']');
     }
 
     fn writeStat(ctx: *Writer, name: []const u8, stat: *const sink.Stat, parent_dev: u64) void {
         ctx.ensureSpace(name.len*6 + 1000);
-        ctx.write(if (stat.dir) ",\n[{\"name\":\"" else ",\n{\"name\":\"");
+        ctx.write(if (stat.etype == .dir) ",\n[{\"name\":\"" else ",\n{\"name\":\"");
         ctx.writeStr(name);
         ctx.writeByte('"');
         if (stat.size > 0) {
@@ -142,17 +139,17 @@ pub const Writer = struct {
             ctx.write(",\"dsize\":");
             ctx.writeUint(util.blocksToSize(stat.blocks));
         }
-        if (stat.dir and stat.dev != parent_dev) {
+        if (stat.etype == .dir and stat.dev != parent_dev) {
             ctx.write(",\"dev\":");
             ctx.writeUint(stat.dev);
         }
-        if (stat.hlinkc) {
+        if (stat.etype == .link) {
             ctx.write(",\"ino\":");
             ctx.writeUint(stat.ino);
             ctx.write(",\"hlnkc\":true,\"nlink\":");
             ctx.writeUint(stat.nlink);
         }
-        if (!stat.dir and !stat.reg) ctx.write(",\"notreg\":true");
+        if (stat.etype == .nonreg) ctx.write(",\"notreg\":true");
         if (main.config.extended) {
             ctx.write(",\"uid\":");
             ctx.writeUint(stat.ext.uid);
@@ -169,7 +166,7 @@ pub const Writer = struct {
 pub const Dir = struct {
     dev: u64,
 
-    pub fn addSpecial(_: *Dir, name: []const u8, sp: sink.Special) void {
+    pub fn addSpecial(_: *Dir, name: []const u8, sp: model.EType) void {
         global.writer.writeSpecial(name, sp);
     }
 

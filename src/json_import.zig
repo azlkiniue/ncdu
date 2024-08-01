@@ -307,7 +307,7 @@ const Ctx = struct {
     p: *Parser,
     sink: *sink.Thread,
     stat: sink.Stat = .{},
-    special: ?sink.Special = null,
+    rderr: bool = false,
     namelen: usize = 0,
     namebuf: [32*1024]u8 = undefined,
 };
@@ -337,9 +337,10 @@ fn itemkey(ctx: *Ctx, key: []const u8) void {
                 var buf: [32]u8 = undefined;
                 const typ = ctx.p.string(&buf);
                 // "frmlnk" is also possible, but currently considered equivalent to "pattern".
-                if (eq(u8, typ, "otherfs") or eq(u8, typ, "othfs")) ctx.special = .other_fs
-                else if (eq(u8, typ, "kernfs")) ctx.special = .kernfs
-                else ctx.special = .excluded;
+                ctx.stat.etype =
+                    if (eq(u8, typ, "otherfs") or eq(u8, typ, "othfs")) .otherfs
+                    else if (eq(u8, typ, "kernfs")) .kernfs
+                    else .pattern;
                 return;
             }
         },
@@ -351,7 +352,7 @@ fn itemkey(ctx: *Ctx, key: []const u8) void {
         },
         'h' => {
             if (eq(u8, key, "hlnkc")) {
-                ctx.stat.hlinkc = ctx.p.boolean();
+                if (ctx.p.boolean()) ctx.stat.etype = .link;
                 return;
             }
         },
@@ -388,19 +389,21 @@ fn itemkey(ctx: *Ctx, key: []const u8) void {
             }
             if (eq(u8, key, "nlink")) {
                 ctx.stat.nlink = ctx.p.uint(u31);
-                if (!ctx.stat.dir and ctx.stat.nlink > 1)
-                    ctx.stat.hlinkc = true;
+                if (ctx.stat.etype != .dir and ctx.stat.nlink > 1)
+                    ctx.stat.etype = .link;
                 return;
             }
             if (eq(u8, key, "notreg")) {
-                ctx.stat.reg = !ctx.p.boolean();
+                if (ctx.p.boolean()) ctx.stat.etype = .nonreg;
                 return;
             }
         },
         'r' => {
             if (eq(u8, key, "read_error")) {
-                if (ctx.p.boolean())
-                    ctx.special = .err;
+                if (ctx.p.boolean()) {
+                    if (ctx.stat.etype == .dir) ctx.rderr = true
+                    else ctx.stat.etype = .err;
+                }
                 return;
             }
         },
@@ -419,8 +422,8 @@ fn itemkey(ctx: *Ctx, key: []const u8) void {
 fn item(ctx: *Ctx, parent: ?*sink.Dir, dev: u64) void {
     ctx.stat = .{ .dev = dev };
     ctx.namelen = 0;
-    ctx.special = null;
-    ctx.stat.dir = switch (ctx.p.nextChr()) {
+    ctx.rderr = false;
+    const isdir = switch (ctx.p.nextChr()) {
         '[' => blk: {
             ctx.p.obj();
             break :blk true;
@@ -428,7 +431,8 @@ fn item(ctx: *Ctx, parent: ?*sink.Dir, dev: u64) void {
         '{' => false,
         else => ctx.p.die("expected object or array"),
     };
-    if (parent == null and !ctx.stat.dir) ctx.p.die("parent item must be a directory");
+    if (parent == null and !isdir) ctx.p.die("parent item must be a directory");
+    ctx.stat.etype = if (isdir) .dir else .reg;
 
     var keybuf: [32]u8 = undefined;
     var first = true;
@@ -439,21 +443,23 @@ fn item(ctx: *Ctx, parent: ?*sink.Dir, dev: u64) void {
     if (ctx.namelen == 0) ctx.p.die("missing \"name\" field");
     const name = (&ctx.namebuf)[0..ctx.namelen];
 
-    if (ctx.stat.dir and (ctx.special == null or ctx.special == .err)) {
+    if (ctx.stat.etype == .dir) {
         const ndev = ctx.stat.dev;
         const dir =
             if (parent) |d| d.addDir(ctx.sink, name, &ctx.stat)
             else sink.createRoot(name, &ctx.stat);
         ctx.sink.setDir(dir);
-        if (ctx.special == .err) dir.setReadError(ctx.sink);
+        if (ctx.rderr) dir.setReadError(ctx.sink);
         while (ctx.p.elem(false)) item(ctx, dir, ndev);
         ctx.sink.setDir(parent);
         dir.unref(ctx.sink);
-    } else if (ctx.special) |s| {
-        parent.?.addSpecial(ctx.sink, name, s);
-        if (ctx.stat.dir and ctx.p.elem(false)) ctx.p.die("unexpected contents in an excluded directory");
+
     } else {
-        parent.?.addStat(ctx.sink, name, &ctx.stat);
+        if (@intFromEnum(ctx.stat.etype) < 0)
+            parent.?.addSpecial(ctx.sink, name, ctx.stat.etype)
+        else
+            parent.?.addStat(ctx.sink, name, &ctx.stat);
+        if (isdir and ctx.p.elem(false)) ctx.p.die("unexpected contents in an excluded directory");
     }
 
     if ((ctx.sink.files_seen.load(.monotonic) & 65) == 0)

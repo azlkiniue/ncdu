@@ -12,6 +12,7 @@ const sink = @import("sink.zig");
 fn toStat(e: *model.Entry) sink.Stat {
     const el = e.link();
     return sink.Stat{
+        .etype = e.pack.etype,
         .blocks = e.pack.blocks,
         .size = e.size,
         .dev =
@@ -20,10 +21,6 @@ fn toStat(e: *model.Entry) sink.Stat {
             else undefined,
         .ino = if (el) |l| l.ino else undefined,
         .nlink = if (el) |l| l.pack.nlink else 1,
-        .hlinkc = el != null,
-        .dir = e.pack.etype == .dir,
-        .reg = if (e.file()) |f| !f.pack.notreg else e.pack.etype != .dir,
-        .symlink = undefined,
         .ext = if (e.ext()) |x| x.* else .{},
     };
 }
@@ -39,23 +36,20 @@ fn rec(ctx: *Ctx, dir: *sink.Dir, entry: *model.Entry) void {
         main.handleEvent(false, false);
 
     ctx.stat = toStat(entry);
-    if (entry.dir()) |d| {
-        var ndir = dir.addDir(ctx.sink, entry.name(), &ctx.stat);
-        ctx.sink.setDir(ndir);
-        if (d.pack.err) ndir.setReadError(ctx.sink);
-        var it = d.sub;
-        while (it) |e| : (it = e.next) rec(ctx, ndir, e);
-        ctx.sink.setDir(dir);
-        ndir.unref(ctx.sink);
-        return;
+    switch (entry.pack.etype) {
+        .dir => {
+            const d = entry.dir().?;
+            var ndir = dir.addDir(ctx.sink, entry.name(), &ctx.stat);
+            ctx.sink.setDir(ndir);
+            if (d.pack.err) ndir.setReadError(ctx.sink);
+            var it = d.sub;
+            while (it) |e| : (it = e.next) rec(ctx, ndir, e);
+            ctx.sink.setDir(dir);
+            ndir.unref(ctx.sink);
+        },
+        .reg, .nonreg, .link => dir.addStat(ctx.sink, entry.name(), &ctx.stat),
+        else => dir.addSpecial(ctx.sink, entry.name(), entry.pack.etype),
     }
-    if (entry.file()) |f| {
-        if (f.pack.err) return dir.addSpecial(ctx.sink, entry.name(), .err);
-        if (f.pack.excluded) return dir.addSpecial(ctx.sink, entry.name(), .excluded);
-        if (f.pack.other_fs) return dir.addSpecial(ctx.sink, entry.name(), .other_fs);
-        if (f.pack.kernfs) return dir.addSpecial(ctx.sink, entry.name(), .kernfs);
-    }
-    dir.addStat(ctx.sink, entry.name(), &ctx.stat);
 }
 
 
