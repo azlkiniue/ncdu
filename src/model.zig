@@ -462,8 +462,8 @@ pub var root: *Dir = undefined;
 test "entry" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var e = Entry.create(arena.allocator(), .file, false, "hello");
-    try std.testing.expectEqual(e.pack.etype, .file);
+    var e = Entry.create(arena.allocator(), .reg, false, "hello");
+    try std.testing.expectEqual(e.pack.etype, .reg);
     try std.testing.expect(!e.pack.isext);
     try std.testing.expectEqualStrings(e.name(), "hello");
 }

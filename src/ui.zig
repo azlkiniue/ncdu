@@ -84,6 +84,7 @@ pub fn errorString(e: anyerror) [:0]const u8 {
         error.ReadOnlyFilesystem => "Read-only filesystem",
         error.SymlinkLoop => "Symlink loop",
         error.SystemFdQuotaExceeded => "System file descriptor limit exceeded",
+        error.EndOfStream => "Unexpected end of file",
         else => @errorName(e),
     };
 }

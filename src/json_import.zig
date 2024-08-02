@@ -467,16 +467,12 @@ fn item(ctx: *Ctx, parent: ?*sink.Dir, dev: u64) void {
 }
 
 
-pub fn import(path: [:0]const u8) void {
+pub fn import(fd: std.fs.File, head: []const u8) void {
     const sink_threads = sink.createThreads(1);
     defer sink.done();
 
-    const fd = if (std.mem.eql(u8, "-", path)) std.io.getStdIn()
-             else std.fs.cwd().openFileZ(path, .{})
-                  catch |e| ui.die("Error reading file: {s}.\n", .{ui.errorString(e)});
-    defer fd.close();
-
-    var p = Parser{.rd = fd};
+    var p = Parser{.rd = fd, .rdsize = head.len};
+    @memcpy(p.buf[0..head.len], head);
     p.array();
     if (p.uint(u16) != 1) p.die("incompatible major format version");
     if (!p.elem(false)) p.die("expected array element");

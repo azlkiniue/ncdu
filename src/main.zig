@@ -9,6 +9,7 @@ const scan = @import("scan.zig");
 const json_import = @import("json_import.zig");
 const json_export = @import("json_export.zig");
 const bin_export = @import("bin_export.zig");
+const bin_reader = @import("bin_reader.zig");
 const sink = @import("sink.zig");
 const mem_src = @import("mem_src.zig");
 const mem_sink = @import("mem_sink.zig");
@@ -25,6 +26,7 @@ test "imports" {
     _ = json_import;
     _ = json_export;
     _ = bin_export;
+    _ = bin_reader;
     _ = sink;
     _ = mem_src;
     _ = mem_sink;
@@ -443,6 +445,22 @@ fn readExcludeFile(path: [:0]const u8) !void {
     }
 }
 
+fn readImport(path: [:0]const u8) !void {
+    const fd =
+        if (std.mem.eql(u8, "-", path)) std.io.getStdIn()
+        else try std.fs.cwd().openFileZ(path, .{});
+    defer fd.close();
+
+    // TODO: While we're at it, recognize and handle compressed JSON
+    var buf: [8]u8 = undefined;
+    try fd.reader().readNoEof(&buf);
+    if (std.mem.eql(u8, &buf, bin_export.SIGNATURE)) {
+        try bin_reader.open(fd);
+        bin_reader.import();
+    } else
+        json_import.import(fd, &buf);
+}
+
 pub fn main() void {
     ui.main_thread = std.Thread.getCurrentId();
 
@@ -559,7 +577,7 @@ pub fn main() void {
     }
 
     if (import_file) |f| {
-        json_import.import(f);
+        readImport(f) catch |e| ui.die("Error reading file '{s}': {s}.\n", .{f, ui.errorString(e)});
         config.imported = true;
     } else {
         var buf = [_]u8{0} ** (std.fs.MAX_PATH_BYTES+1);

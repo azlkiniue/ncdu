@@ -23,7 +23,9 @@ pub const global = struct {
 
 const BLOCK_SIZE: usize = 512*1024; // XXX: Current maximum for benchmarking, should just stick with a fixed block size.
 
-const ItemKey = enum(u5) {
+pub const SIGNATURE = "\xbfncduEX1";
+
+pub const ItemKey = enum(u5) {
     // all items
     type = 0, // EType
     name = 1, // bytes
@@ -48,13 +50,14 @@ const ItemKey = enum(u5) {
     gid   = 16, // u32
     mode  = 17, // u16
     mtime = 18, // u64
+    _,
 };
 
 // Pessimistic upper bound on the encoded size of an item, excluding the name field.
 // 2 bytes for map start/end, 11 per field (2 for the key, 9 for a full u64).
 const MAX_ITEM_LEN = 2 + 11 * @typeInfo(ItemKey).Enum.fields.len;
 
-const CborMajor = enum(u3) { pos, neg, bytes, text, array, map, tag, simple };
+pub const CborMajor = enum(u3) { pos, neg, bytes, text, array, map, tag, simple };
 
 inline fn bigu16(v: u16) [2]u8 { return @bitCast(std.mem.nativeToBig(u16, v)); }
 inline fn bigu32(v: u32) [4]u8 { return @bitCast(std.mem.nativeToBig(u32, v)); }
@@ -436,7 +439,7 @@ pub fn done(threads: []sink.Thread) void {
 
 pub fn setupOutput(fd: std.fs.File) void {
     global.fd = fd;
-    fd.writeAll("\xbfncduEX1") catch |e|
+    fd.writeAll(SIGNATURE) catch |e|
         ui.die("Error writing to file: {s}.\n", .{ ui.errorString(e) });
     global.file_off = 8;
 
