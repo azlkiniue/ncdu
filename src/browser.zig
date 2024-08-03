@@ -216,10 +216,13 @@ const Row = struct {
         ui.addch('[');
         if (main.config.show_percent) {
             self.bg.fg(.num);
-            ui.addprint("{d:>5.1}", .{ 100 *
-                if (main.config.show_blocks) @as(f32, @floatFromInt(item.pack.blocks)) / @as(f32, @floatFromInt(@max(1, dir_parent.entry.pack.blocks)))
-                else                         @as(f32, @floatFromInt(item.size))        / @as(f32, @floatFromInt(@max(1, dir_parent.entry.size)))
-            });
+            var num   : u64 = if (main.config.show_blocks)             item.pack.blocks else             item.size;
+            var denom : u64 = if (main.config.show_blocks) dir_parent.entry.pack.blocks else dir_parent.entry.size;
+            if (num > (1<<54)) { // avoid overflow
+                num >>= 10;
+                denom >>= 10;
+            }
+            ui.addstr(&util.fmt5dec(@intCast( (num * 1000 + (denom / 2)) / denom )));
             self.bg.fg(.default);
             ui.addch('%');
         }
@@ -261,12 +264,12 @@ const Row = struct {
             ui.addnum(self.bg, n);
         } else if (n < 100_000)
             ui.addnum(self.bg, n)
-        else if (n < 1000_000) {
-            ui.addprint("{d:>5.1}", .{ @as(f32, @floatFromInt(n)) / 1000 });
+        else if (n < 999_950) {
+            ui.addstr(&util.fmt5dec(@intCast( (n + 50) / 100 )));
             self.bg.fg(.default);
             ui.addch('k');
-        } else if (n < 1000_000_000) {
-            ui.addprint("{d:>5.1}", .{ @as(f32, @floatFromInt(n)) / 1000_000 });
+        } else if (n < 999_950_000) {
+            ui.addstr(&util.fmt5dec(@intCast( (n + 50_000) / 100_000 )));
             self.bg.fg(.default);
             ui.addch('M');
         } else {
