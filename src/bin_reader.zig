@@ -9,6 +9,8 @@ const sink = @import("sink.zig");
 const ui = @import("ui.zig");
 const bin_export = @import("bin_export.zig");
 
+extern fn ZSTD_decompress(dst: ?*anyopaque, dstCapacity: usize, src: ?*const anyopaque, compressedSize: usize) usize;
+
 const CborMajor = bin_export.CborMajor;
 const ItemKey = bin_export.ItemKey;
 
@@ -90,7 +92,7 @@ fn readBlock(num: u32) []const u8 {
     const offlen = bigu64(global.index[num*8..][0..8].*);
     if ((offlen & 0xffffff) < 16) die();
 
-    const buf = main.allocator.alloc(u8, (offlen & 0xffffff) - 12) catch unreachable;
+    const buf = main.allocator.alloc(u8, @intCast((offlen & 0xffffff) - 12)) catch unreachable;
     defer main.allocator.free(buf);
     const rdlen = global.fd.preadAll(buf, (offlen >> 24) + 8)
         catch |e| ui.die("Error reading from file: {s}\n", .{ui.errorString(e)});
@@ -100,8 +102,9 @@ fn readBlock(num: u32) []const u8 {
     if (rawlen >= (1<<24)) die();
     block.data = main.allocator.alloc(u8, rawlen) catch unreachable;
 
-    // TODO: decompress
-    @memcpy(block.data, buf[4..][0..rawlen]);
+    const res = ZSTD_decompress(block.data.ptr, block.data.len, buf[4..].ptr, buf.len - 4);
+    if (res != block.data.len) ui.die("Error decompressing block {} (expected {} got {})\n", .{ num, block.data.len, res });
+
     return block.data;
 }
 
@@ -190,8 +193,8 @@ const CborVal = struct {
     fn bytes(v: *const CborVal) []const u8 {
         if (v.indef or (v.major != .bytes and v.major != .text)) die();
         if (v.rd.buf.len < v.arg) die();
-        defer v.rd.buf = v.rd.buf[v.arg..];
-        return v.rd.buf[0..v.arg];
+        defer v.rd.buf = v.rd.buf[@intCast(v.arg)..];
+        return v.rd.buf[0..@intCast(v.arg)];
     }
 
     // Skip current value.
@@ -207,13 +210,15 @@ const CborVal = struct {
         switch (v.major) {
             .bytes, .text => {
                 if (v.rd.buf.len < v.arg) die();
-                v.rd.buf = v.rd.buf[v.arg..];
+                v.rd.buf = v.rd.buf[@intCast(v.arg)..];
             },
             .array => {
-                for (0..v.arg) |_| v.rd.next().skip();
+                if (v.arg > (1<<24)) die();
+                for (0..@intCast(v.arg)) |_| v.rd.next().skip();
             },
             .map => {
-                for (0..v.arg*|2) |_| v.rd.next().skip();
+                if (v.arg > (1<<24)) die();
+                for (0..@intCast(v.arg*|2)) |_| v.rd.next().skip();
             },
             else => {},
         }
@@ -297,7 +302,7 @@ test "CBOR skip parsing" {
 
 const ItemParser = struct {
     r: CborReader,
-    len: ?usize = null,
+    len: ?u64 = null,
 
     const Field = struct {
         key: ItemKey,
@@ -344,7 +349,7 @@ fn readItem(ref: u64) ItemParser {
     if (ref >= (1 << (24 + 32))) die();
     const block = readBlock(@intCast(ref >> 24));
     if ((ref & 0xffffff) > block.len) die();
-    return ItemParser.init(block[(ref & 0xffffff)..]);
+    return ItemParser.init(block[@intCast(ref & 0xffffff)..]);
 }
 
 const Import = struct {

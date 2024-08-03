@@ -7,11 +7,9 @@ const model = @import("model.zig");
 const sink = @import("sink.zig");
 const util = @import("util.zig");
 const ui = @import("ui.zig");
-const c = @cImport({
-    @cInclude("zlib.h");
-    @cInclude("zstd.h");
-    @cInclude("lz4.h");
-});
+
+extern fn ZSTD_compress(dst: ?*anyopaque, dstCapacity: usize, src: ?*const anyopaque, srcSize: usize, compressionLevel: c_int) usize;
+extern fn ZSTD_isError(code: usize) c_uint;
 
 pub const global = struct {
     var fd: std.fs.File = undefined;
@@ -21,7 +19,8 @@ pub const global = struct {
     var root_itemref: u64 = 0;
 };
 
-const BLOCK_SIZE: usize = 512*1024; // XXX: Current maximum for benchmarking, should just stick with a fixed block size.
+const BLOCK_SIZE: usize = 64*1024;
+const COMPRESSED_SIZE: usize = 65824; // ZSTD_COMPRESSBOUND(BLOCK_SIZE)
 
 pub const SIGNATURE = "\xbfncduEX1";
 
@@ -69,48 +68,30 @@ inline fn cborByte(major: CborMajor, arg: u5) u8 { return (@as(u8, @intFromEnum(
 
 
 pub const Thread = struct {
-    buf: [BLOCK_SIZE]u8 = undefined,
+    buf: []u8 = undefined,
     off: usize = BLOCK_SIZE,
     block_num: u32 = std.math.maxInt(u32),
     itemref: u64 = 0, // ref of item currently being written
+    tmp: []u8 = undefined, // Temporary buffer for headers and compression.
 
-    // Temporary buffer for headers and compression.
-    // TODO: check with compressBound()/ZSTD_compressBound()
-    tmp: [BLOCK_SIZE+128]u8 = undefined,
-
+    // unused, but kept around for easy debugging
     fn compressNone(in: []const u8, out: []u8) usize {
         @memcpy(out[0..in.len], in);
         return in.len;
     }
 
-    fn compressZlib(in: []const u8, out: []u8) usize {
-        var outlen: c.uLongf = out.len;
-        const r = c.compress2(out.ptr, &outlen, in.ptr, in.len, main.config.complevel);
-        std.debug.assert(r == c.Z_OK);
-        return outlen;
-    }
-
     fn compressZstd(in: []const u8, out: []u8) usize {
-        const r = c.ZSTD_compress(out.ptr, out.len, in.ptr, in.len, main.config.complevel);
-        std.debug.assert(c.ZSTD_isError(r) == 0);
-        return r;
-    }
-
-    fn compressLZ4(in: []const u8, out: []u8) usize {
-        const r = c.LZ4_compress_default(in.ptr, out.ptr, @intCast(in.len), @intCast(out.len));
-        std.debug.assert(r > 0);
-        return @intCast(r);
+        while (true) {
+            const r = ZSTD_compress(out.ptr, out.len, in.ptr, in.len, main.config.complevel);
+            if (ZSTD_isError(r) == 0) return r;
+            ui.oom(); // That *ought* to be the only reason the above call can fail.
+        }
     }
 
     fn createBlock(t: *Thread) []const u8 {
         if (t.block_num == std.math.maxInt(u32) or t.off <= 1) return "";
 
-        const bodylen = switch (main.config.compression) {
-            .none => compressNone(t.buf[0..t.off], t.tmp[12..]),
-            .zlib => compressZlib(t.buf[0..t.off], t.tmp[12..]),
-            .zstd => compressZstd(t.buf[0..t.off], t.tmp[12..]),
-            .lz4 => compressLZ4(t.buf[0..t.off], t.tmp[12..]),
-        };
+        const bodylen = compressZstd(t.buf[0..t.off], t.tmp[12..]);
         const blocklen: u32 = @intCast(bodylen + 16);
         t.tmp[0..4].* = blockHeader(1, blocklen);
         t.tmp[4..8].* = bigu32(t.block_num);
@@ -188,7 +169,7 @@ pub const Thread = struct {
     // Reserve space for a new item, write out the type, prev and name fields and return the itemref.
     fn itemStart(t: *Thread, itype: model.EType, prev_item: u64, name: []const u8) u64 {
         const min_len = name.len + MAX_ITEM_LEN;
-        if (t.off + min_len > main.config.blocksize) t.flush(min_len);
+        if (t.off + min_len > t.buf.len) t.flush(min_len);
 
         t.itemref = (@as(u64, t.block_num) << 24) | t.off;
         t.cborIndef(.map);
@@ -418,12 +399,21 @@ pub const Dir = struct {
 };
 
 
-pub fn createRoot(stat: *const sink.Stat) Dir {
+pub fn createRoot(stat: *const sink.Stat, threads: []sink.Thread) Dir {
+    for (threads) |*t| {
+        t.sink.bin.buf = main.allocator.alloc(u8, BLOCK_SIZE) catch unreachable;
+        t.sink.bin.tmp = main.allocator.alloc(u8, COMPRESSED_SIZE) catch unreachable;
+    }
+
     return .{ .stat = stat.* };
 }
 
 pub fn done(threads: []sink.Thread) void {
-    for (threads) |*t| t.sink.bin.flush(0);
+    for (threads) |*t| {
+        t.sink.bin.flush(0);
+        main.allocator.free(t.sink.bin.buf);
+        main.allocator.free(t.sink.bin.tmp);
+    }
 
     while (std.mem.endsWith(u8, global.index.items, &[1]u8{0}**8))
         global.index.shrinkRetainingCapacity(global.index.items.len - 8);

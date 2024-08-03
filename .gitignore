@@ -4,6 +4,7 @@
 *.swp
 *~
 ncurses
+zstd
 static-*/
 zig-cache/
 zig-out/

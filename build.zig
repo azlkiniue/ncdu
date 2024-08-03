@@ -19,9 +19,7 @@ pub fn build(b: *std.Build) void {
 
     exe.pie = pie;
     exe.root_module.linkSystemLibrary("ncursesw", .{});
-    exe.root_module.linkSystemLibrary("zlib", .{});
     exe.root_module.linkSystemLibrary("libzstd", .{});
-    exe.root_module.linkSystemLibrary("lz4", .{});
     // https://github.com/ziglang/zig/blob/b52be973dfb7d1408218b8e75800a2da3dc69108/build.zig#L551-L554
     if (target.result.isDarwin()) {
         // useful for package maintainers

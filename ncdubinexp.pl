@@ -27,6 +27,7 @@ use bytes;
 no warnings 'portable';
 use List::Util 'min', 'max';
 use CBOR::XS;  # Does not officially support recent perl versions, but it's the only CPAN module that supports streaming.
+use Compress::Zstd;
 
 my $printblocks = grep $_ eq 'blocks', @ARGV;
 my $printitems = grep $_ eq 'items', @ARGV;
@@ -76,13 +77,17 @@ sub datablock($prefix, $off, $blklen, $content) {
     die sprintf "%s: Duplicate block id %d (first at %010x)", $prefix, $num, $datablocks{$num}>>24 if $datablocks{$num};
     $datablocks{$num} = ($off << 24) | $blklen;
 
-    $printblocks && printf "%s: data block %d  rawlen %d (%.2f)\n", $prefix, $num, $rawlen, $rawlen/(length($content)-8)*100;
+    my $compressed = substr $content, 8;
+    $printblocks && printf "%s: data block %d  rawlen %d (%.2f)\n", $prefix, $num, $rawlen, $rawlen/(length($compressed))*100;
 
-    $datablock_len += length($content)-8;
+    $datablock_len += length($compressed);
     $rawdata_len += $rawlen;
 
-    # TODO: Decompress
-    cbordata($num, substr $content, 8);
+    my $rawdata = decompress($compressed);
+    die "$prefix: Block id $num failed decompression\n" if !defined $rawdata;
+    die sprintf "%s: Block id %d decompressed to %d bytes but expected %d\n",
+        $prefix, $num, length($rawdata), $rawlen if $rawlen != length $rawdata;
+    cbordata($num, $rawdata);
 }
 
 

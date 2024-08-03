@@ -279,7 +279,7 @@ pub fn createRoot(path: []const u8, stat: *const Stat) *Dir {
         .out = switch (global.sink) {
             .mem => .{ .mem = mem_sink.createRoot(path, stat) },
             .json => .{ .json = json_export.createRoot(path, stat) },
-            .bin => .{ .bin = bin_export.createRoot(stat) },
+            .bin => .{ .bin = bin_export.createRoot(stat, global.threads) },
         },
     };
     return d;
