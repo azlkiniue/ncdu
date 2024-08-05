@@ -222,7 +222,7 @@ const Row = struct {
                 num >>= 10;
                 denom >>= 10;
             }
-            ui.addstr(&util.fmt5dec(@intCast( (num * 1000 + (denom / 2)) / denom )));
+            ui.addstr(&util.fmt5dec(@intCast( @min(1000, (num * 1000 + (denom / 2)) / @max(1, denom) ))));
             self.bg.fg(.default);
             ui.addch('%');
         }
