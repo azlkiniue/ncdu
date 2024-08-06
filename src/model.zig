@@ -37,6 +37,20 @@ pub const EType = enum(i3) {
 // Type for the Entry.Packed.blocks field. Smaller than a u64 to make room for flags.
 pub const Blocks = u60;
 
+// Entries read from bin_reader may refer to other entries by itemref rather than pointer.
+// This is a hack that allows browser.zig to use the same types for in-memory
+// and bin_reader-backed directory trees. Most code can only deal with
+// in-memory trees and accesses the .ptr field directly.
+pub const Ref = extern union {
+    ptr: ?*Entry align(1),
+    ref: u64 align(1),
+
+    pub fn isNull(r: Ref) bool {
+        if (main.config.binreader) return r.ref == std.math.maxInt(u64)
+        else return r.ptr == null;
+    }
+};
+
 // Memory layout:
 //      (Ext +) Dir + name
 //  or: (Ext +) Link + name
@@ -51,7 +65,7 @@ pub const Blocks = u60;
 pub const Entry = extern struct {
     pack: Packed align(1),
     size: u64 align(1) = 0,
-    next: ?*Entry align(1) = null,
+    next: Ref = .{ .ptr = null },
 
     pub const Packed = packed struct(u64) {
         etype: EType,
@@ -81,6 +95,10 @@ pub const Entry = extern struct {
         };
         const name_ptr: [*:0]const u8 = @ptrCast(self_name);
         return std.mem.sliceTo(name_ptr, 0);
+    }
+
+    pub fn nameHash(self: *const Self) u64 {
+        return std.hash.Wyhash.hash(0, self.name());
     }
 
     pub fn ext(self: *Self) ?*Ext {
@@ -115,6 +133,17 @@ pub const Entry = extern struct {
         };
     }
 
+    pub fn destroy(self: *Self, allocator: std.mem.Allocator) void {
+        const ptr: [*]u8 = if (self.ext()) |e| @ptrCast(e) else @ptrCast(self);
+        const esize: usize = switch (self.pack.etype) {
+            .dir => @sizeOf(Dir),
+            .link => @sizeOf(Link),
+            else => @sizeOf(File),
+        };
+        const size = (if (self.pack.isext) @as(usize, @sizeOf(Ext)) else 0) + esize + self.name().len + 1;
+        allocator.free(ptr[0..size]);
+    }
+
     fn hasErr(self: *Self) bool {
         return
             if(self.dir()) |d| d.pack.err or d.pack.suberr
@@ -123,8 +152,8 @@ pub const Entry = extern struct {
 
     fn removeLinks(self: *Entry) void {
         if (self.dir()) |d| {
-            var it = d.sub;
-            while (it) |e| : (it = e.next) e.removeLinks();
+            var it = d.sub.ptr;
+            while (it) |e| : (it = e.next.ptr) e.removeLinks();
         }
         if (self.link()) |l| l.removeLink();
     }
@@ -136,8 +165,8 @@ pub const Entry = extern struct {
             d.items = 0;
             d.pack.err = false;
             d.pack.suberr = false;
-            var it = d.sub;
-            while (it) |e| : (it = e.next) e.zeroStatsRec();
+            var it = d.sub.ptr;
+            while (it) |e| : (it = e.next.ptr) e.zeroStatsRec();
         }
     }
 
@@ -163,7 +192,7 @@ const DevId = u30; // Can be reduced to make room for more flags in Dir.Packed.
 pub const Dir = extern struct {
     entry: Entry,
 
-    sub: ?*Entry align(1) = null,
+    sub: Ref = .{ .ptr = null },
     parent: ?*Dir align(1) = null,
 
     // entry.{blocks,size}: Total size of all unique files + dirs. Non-shared hardlinks are counted only once.
@@ -210,8 +239,8 @@ pub const Dir = extern struct {
     // been updated and does not propagate to parents.
     pub fn updateSubErr(self: *@This()) void {
         self.pack.suberr = false;
-        var sub = self.sub;
-        while (sub) |e| : (sub = e.next) {
+        var sub = self.sub.ptr;
+        while (sub) |e| : (sub = e.next.ptr) {
             if (e.hasErr()) {
                 self.pack.suberr = true;
                 break;
@@ -460,9 +489,8 @@ pub var root: *Dir = undefined;
 
 
 test "entry" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var e = Entry.create(arena.allocator(), .reg, false, "hello");
+    var e = Entry.create(std.testing.allocator, .reg, false, "hello");
+    defer e.destroy(std.testing.allocator);
     try std.testing.expectEqual(e.pack.etype, .reg);
     try std.testing.expect(!e.pack.isext);
     try std.testing.expectEqualStrings(e.name(), "hello");

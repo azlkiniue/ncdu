@@ -42,8 +42,8 @@ fn rec(ctx: *Ctx, dir: *sink.Dir, entry: *model.Entry) void {
             var ndir = dir.addDir(ctx.sink, entry.name(), &ctx.stat);
             ctx.sink.setDir(ndir);
             if (d.pack.err) ndir.setReadError(ctx.sink);
-            var it = d.sub;
-            while (it) |e| : (it = e.next) rec(ctx, ndir, e);
+            var it = d.sub.ptr;
+            while (it) |e| : (it = e.next.ptr) rec(ctx, ndir, e);
             ctx.sink.setDir(dir);
             ndir.unref(ctx.sink);
         },
@@ -65,8 +65,8 @@ pub fn run(d: *model.Dir) void {
     const root = sink.createRoot(buf.items, &ctx.stat);
     buf.deinit();
 
-    var it = d.sub;
-    while (it) |e| : (it = e.next) rec(&ctx, root, e);
+    var it = d.sub.ptr;
+    while (it) |e| : (it = e.next.ptr) rec(&ctx, root, e);
 
     root.unref(ctx.sink);
     sink.done();

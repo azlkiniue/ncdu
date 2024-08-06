@@ -6,6 +6,7 @@ const main = @import("main.zig");
 const model = @import("model.zig");
 const sink = @import("sink.zig");
 const mem_sink = @import("mem_sink.zig");
+const bin_reader = @import("bin_reader.zig");
 const delete = @import("delete.zig");
 const ui = @import("ui.zig");
 const c = @cImport(@cInclude("time.h"));
@@ -13,6 +14,13 @@ const util = @import("util.zig");
 
 // Currently opened directory.
 pub var dir_parent: *model.Dir = undefined;
+pub var dir_path: [:0]u8 = undefined;
+var dir_parents = std.ArrayList(model.Ref).init(main.allocator);
+var dir_alloc = std.heap.ArenaAllocator.init(main.allocator);
+
+// Used to keep track of which dir is which ref, so we can enter it.
+// Only used for binreader browsing.
+var dir_refs = std.ArrayList(struct { ptr: *model.Dir, ref: u64 }).init(main.allocator);
 
 // Sorted list of all items in the currently opened directory.
 // (first item may be null to indicate the "parent directory" item)
@@ -33,28 +41,28 @@ const View = struct {
 
     // The hash(name) of the selected entry (cursor), this is used to derive
     // cursor_idx after sorting or changing directory.
-    // (collisions may cause the wrong entry to be selected, but dealing with
-    // string allocations sucks and I expect collisions to be rare enough)
     cursor_hash: u64 = 0,
 
-    fn hashEntry(entry: ?*model.Entry) u64 {
-        return if (entry) |e| std.hash.Wyhash.hash(0, e.name()) else 0;
+    fn dirHash() u64 {
+        return std.hash.Wyhash.hash(0, dir_path);
     }
 
     // Update cursor_hash and save the current view to the hash table.
     fn save(self: *@This()) void {
         self.cursor_hash = if (dir_items.items.len == 0) 0
-                           else hashEntry(dir_items.items[cursor_idx]);
-        opened_dir_views.put(@intFromPtr(dir_parent), self.*) catch {};
+                           else if (dir_items.items[cursor_idx]) |e| e.nameHash()
+                           else 0;
+        opened_dir_views.put(dirHash(), self.*) catch {};
     }
 
     // Should be called after dir_parent or dir_items has changed, will load the last saved view and find the proper cursor_idx.
-    fn load(self: *@This(), sel: ?*const model.Entry) void {
-        if (opened_dir_views.get(@intFromPtr(dir_parent))) |v| self.* = v
+    fn load(self: *@This(), sel: u64) void {
+        if (opened_dir_views.get(dirHash())) |v| self.* = v
         else self.* = @This(){};
         cursor_idx = 0;
         for (dir_items.items, 0..) |e, i| {
-            if (if (sel != null) e == sel else self.cursor_hash == hashEntry(e)) {
+            const h = if (e) |x| x.nameHash() else 0;
+            if (if (sel != 0) h == sel else self.cursor_hash == h) {
                 cursor_idx = i;
                 break;
             }
@@ -65,10 +73,8 @@ const View = struct {
 var current_view = View{};
 
 // Directories the user has browsed to before, and which item was last selected.
-// The key is the @intFromPtr() of the opened *Dir; An int because the pointer
-// itself may have gone stale after deletion or refreshing. They're only for
-// lookups, not dereferencing.
-var opened_dir_views = std.AutoHashMap(usize, View).init(main.allocator);
+// The key is the hash of dir_path;
+var opened_dir_views = std.AutoHashMap(u64, View).init(main.allocator);
 
 fn sortIntLt(a: anytype, b: @TypeOf(a)) ?bool {
     return if (a == b) null else if (main.config.sort_order == .asc) a < b else a > b;
@@ -114,7 +120,7 @@ fn sortLt(_: void, ap: ?*model.Entry, bp: ?*model.Entry) bool {
 // - config.sort_* changes
 // - dir_items changes (i.e. from loadDir())
 // - files in this dir have changed in a way that affects their ordering
-fn sortDir(next_sel: ?*const model.Entry) void {
+fn sortDir(next_sel: u64) void {
     // No need to sort the first item if that's the parent dir reference,
     // excluding that allows sortLt() to ignore null values.
     const lst = dir_items.items[(if (dir_items.items.len > 0 and dir_items.items[0] == null) @as(usize, 1) else 0)..];
@@ -126,16 +132,22 @@ fn sortDir(next_sel: ?*const model.Entry) void {
 // - dir_parent changes (i.e. we change directory)
 // - config.show_hidden changes
 // - files in this dir have been added or removed
-pub fn loadDir(next_sel: ?*const model.Entry) void {
+pub fn loadDir(next_sel: u64) void {
+    _ = dir_alloc.reset(.free_all);
     dir_items.shrinkRetainingCapacity(0);
+    dir_refs.shrinkRetainingCapacity(0);
     dir_max_size = 1;
     dir_max_blocks = 1;
     dir_has_shared = false;
 
-    if (dir_parent != model.root)
+    if (dir_parents.items.len > 1)
         dir_items.append(null) catch unreachable;
-    var it = dir_parent.sub;
-    while (it) |e| : (it = e.next) {
+    var ref = dir_parent.sub;
+    while (!ref.isNull()) {
+        const e =
+            if (main.config.binreader) bin_reader.get(ref.ref, dir_alloc.allocator())
+            else ref.ptr.?;
+
         if (e.pack.blocks > dir_max_blocks) dir_max_blocks = e.pack.blocks;
         if (e.size > dir_max_size) dir_max_size = e.size;
         const shown = main.config.show_hidden or blk: {
@@ -148,11 +160,66 @@ pub fn loadDir(next_sel: ?*const model.Entry) void {
         };
         if (shown) {
             dir_items.append(e) catch unreachable;
-            if (e.dir()) |d| if (d.shared_blocks > 0 or d.shared_size > 0) { dir_has_shared = true; };
+            if (e.dir()) |d| {
+                if (d.shared_blocks > 0 or d.shared_size > 0) dir_has_shared = true;
+                if (main.config.binreader) dir_refs.append(.{ .ptr = d, .ref = ref.ref }) catch unreachable;
+            }
         }
+
+        ref = e.next;
     }
     sortDir(next_sel);
 }
+
+
+pub fn initRoot() void {
+    if (main.config.binreader) {
+        const ref = bin_reader.getRoot();
+        dir_parent = bin_reader.get(ref, main.allocator).dir() orelse ui.die("Invalid import\n", .{});
+        dir_parents.append(.{ .ref = ref }) catch unreachable;
+    } else {
+        dir_parent = model.root;
+        dir_parents.append(.{ .ptr = &dir_parent.entry }) catch unreachable;
+    }
+    dir_path = main.allocator.dupeZ(u8, dir_parent.entry.name()) catch unreachable;
+    loadDir(0);
+}
+
+fn enterSub(e: *model.Dir) void {
+    if (main.config.binreader) {
+        const ref = blk: {
+            for (dir_refs.items) |r| if (r.ptr == e) break :blk r.ref;
+            return;
+        };
+        dir_parent.entry.destroy(main.allocator);
+        dir_parent = bin_reader.get(ref, main.allocator).dir() orelse unreachable;
+        dir_parents.append(.{ .ref = ref }) catch unreachable;
+    } else {
+        dir_parent = e;
+        dir_parents.append(.{ .ptr = &e.entry }) catch unreachable;
+    }
+
+    const newpath = std.fs.path.joinZ(main.allocator, &[_][]const u8{ dir_path, e.entry.name() }) catch unreachable;
+    main.allocator.free(dir_path);
+    dir_path = newpath;
+}
+
+fn enterParent() void {
+    std.debug.assert(dir_parents.items.len > 1);
+
+    _ = dir_parents.pop();
+    const p = dir_parents.items[dir_parents.items.len-1];
+    if (main.config.binreader) {
+        dir_parent.entry.destroy(main.allocator);
+        dir_parent = bin_reader.get(p.ref, main.allocator).dir() orelse unreachable;
+    } else
+        dir_parent = p.ptr.?.dir() orelse unreachable;
+
+    const newpath = main.allocator.dupeZ(u8, std.fs.path.dirname(dir_path) orelse unreachable) catch unreachable;
+    main.allocator.free(dir_path);
+    dir_path = newpath;
+}
+
 
 const Row = struct {
     row: u32,
@@ -168,7 +235,7 @@ const Row = struct {
         const ch: u7 = switch (item.pack.etype) {
             .dir => if (item.dir().?.pack.err) '!'
                     else if (item.dir().?.pack.suberr) '.'
-                    else if (item.dir().?.sub == null) 'e'
+                    else if (item.dir().?.sub.isNull()) 'e'
                     else return,
             .link => 'H',
             .pattern => '<',
@@ -561,7 +628,7 @@ const info = struct {
             if (ch == 10) { // Enter - go to selected entry
                 const l = links.?.items[links_idx];
                 dir_parent = l.parent;
-                loadDir(&l.entry);
+                loadDir(l.entry.nameHash());
                 set(null, .info);
             }
         }
@@ -748,12 +815,7 @@ pub fn draw() void {
     ui.move(1,3);
     ui.addch(' ');
     ui.style(.dir);
-
-    var pathbuf = std.ArrayList(u8).init(main.allocator);
-    dir_parent.fmtPath(true, &pathbuf);
-    ui.addstr(ui.shorten(ui.toUtf8(util.arrayListBufZ(&pathbuf)), ui.cols -| 5));
-    pathbuf.deinit();
-
+    ui.addstr(ui.shorten(ui.toUtf8(dir_path), ui.cols -| 5));
     ui.style(.default);
     ui.addch(' ');
 
@@ -811,7 +873,7 @@ fn sortToggle(col: main.config.SortCol, default_order: main.config.SortOrder) vo
     else if (main.config.sort_order == .asc) main.config.sort_order = .desc
     else main.config.sort_order = .asc;
     main.config.sort_col = col;
-    sortDir(null);
+    sortDir(0);
 }
 
 fn keyInputSelection(ch: i32, idx: *usize, len: usize, page: u32) bool {
@@ -886,22 +948,22 @@ pub fn keyInput(ch: i32) void {
         'M' => if (main.config.extended) sortToggle(.mtime, .desc),
         'e' => {
             main.config.show_hidden = !main.config.show_hidden;
-            loadDir(null);
+            loadDir(0);
             state = .main;
         },
         't' => {
             main.config.sort_dirsfirst = !main.config.sort_dirsfirst;
-            sortDir(null);
+            sortDir(0);
         },
         'a' => {
             main.config.show_blocks = !main.config.show_blocks;
             if (main.config.show_blocks and main.config.sort_col == .size) {
                 main.config.sort_col = .blocks;
-                sortDir(null);
+                sortDir(0);
             }
             if (!main.config.show_blocks and main.config.sort_col == .blocks) {
                 main.config.sort_col = .size;
-                sortDir(null);
+                sortDir(0);
             }
         },
 
@@ -910,21 +972,22 @@ pub fn keyInput(ch: i32) void {
             if (dir_items.items.len == 0) {
             } else if (dir_items.items[cursor_idx]) |e| {
                 if (e.dir()) |d| {
-                    dir_parent = d;
-                    loadDir(null);
+                    enterSub(d);
+                    //dir_parent = d;
+                    loadDir(0);
                     state = .main;
                 }
-            } else if (dir_parent.parent) |p| {
-                dir_parent = p;
-                loadDir(null);
+            } else if (dir_parents.items.len > 1) {
+                enterParent();
+                loadDir(0);
                 state = .main;
             }
         },
         'h', '<', ui.c.KEY_BACKSPACE, ui.c.KEY_LEFT => {
-            if (dir_parent.parent) |p| {
-                const e = dir_parent;
-                dir_parent = p;
-                loadDir(&e.entry);
+            if (dir_parents.items.len > 1) {
+                //const h = dir_parent.entry.nameHash();
+                enterParent();
+                loadDir(0);
                 state = .main;
             }
         },

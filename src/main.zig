@@ -95,6 +95,7 @@ pub const config = struct {
     pub var sort_natural: bool = true;
 
     pub var imported: bool = false;
+    pub var binreader: bool = false;
     pub var can_delete: ?bool = null;
     pub var can_shell: ?bool = null;
     pub var can_refresh: ?bool = null;
@@ -373,10 +374,6 @@ fn spawnShell() void {
     ui.deinit();
     defer ui.init();
 
-    var path = std.ArrayList(u8).init(allocator);
-    defer path.deinit();
-    browser.dir_parent.fmtPath(true, &path);
-
     var env = std.process.getEnvMap(allocator) catch unreachable;
     defer env.deinit();
     // NCDU_LEVEL can only count to 9, keeps the implementation simple.
@@ -391,7 +388,7 @@ fn spawnShell() void {
 
     const shell = std.posix.getenvZ("NCDU_SHELL") orelse std.posix.getenvZ("SHELL") orelse "/bin/sh";
     var child = std.process.Child.init(&.{shell}, allocator);
-    child.cwd = path.items;
+    child.cwd = browser.dir_path;
     child.env_map = &env;
 
     const stdin = std.io.getStdIn();
@@ -451,16 +448,18 @@ fn readImport(path: [:0]const u8) !void {
     const fd =
         if (std.mem.eql(u8, "-", path)) std.io.getStdIn()
         else try std.fs.cwd().openFileZ(path, .{});
-    defer fd.close();
+    errdefer fd.close();
 
     // TODO: While we're at it, recognize and handle compressed JSON
     var buf: [8]u8 = undefined;
     try fd.reader().readNoEof(&buf);
     if (std.mem.eql(u8, &buf, bin_export.SIGNATURE)) {
         try bin_reader.open(fd);
-        bin_reader.import();
-    } else
+        config.binreader = true;
+    } else {
         json_import.import(fd, &buf);
+        fd.close();
+    }
 }
 
 pub fn main() void {
@@ -571,6 +570,8 @@ pub fn main() void {
     if (import_file) |f| {
         readImport(f) catch |e| ui.die("Error reading file '{s}': {s}.\n", .{f, ui.errorString(e)});
         config.imported = true;
+        if (config.binreader and export_json != null or export_bin != null)
+            bin_reader.import();
     } else {
         var buf = [_]u8{0} ** (std.fs.MAX_PATH_BYTES+1);
         const path =
@@ -587,8 +588,7 @@ pub fn main() void {
     config.scan_ui = .full; // in case we're refreshing from the UI, always in full mode.
     ui.init();
     state = .browse;
-    browser.dir_parent = model.root;
-    browser.loadDir(null);
+    browser.initRoot();
 
     while (true) {
         switch (state) {
@@ -602,7 +602,7 @@ pub fn main() void {
                     while (state == .refresh) handleEvent(true, true);
                 };
                 state = .browse;
-                browser.loadDir(null);
+                browser.loadDir(0);
             },
             .shell => {
                 spawnShell();
@@ -611,7 +611,7 @@ pub fn main() void {
             .delete => {
                 const next = delete.delete();
                 state = .browse;
-                browser.loadDir(next);
+                browser.loadDir(if (next) |n| n.nameHash() else 0);
             },
             else => handleEvent(true, false)
         }

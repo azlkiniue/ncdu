@@ -188,6 +188,10 @@ const CborVal = struct {
         }
     }
 
+    fn isTrue(v: *const CborVal) bool {
+        return v.major == .simple and v.arg == 21;
+    }
+
     // Read either a byte or text string.
     // Doesn't validate UTF-8 strings, doesn't support indefinite-length strings.
     fn bytes(v: *const CborVal) []const u8 {
@@ -379,7 +383,7 @@ const Import = struct {
             .asize => ctx.stat.size = kv.val.int(u64),
             .dsize => ctx.stat.blocks = @intCast(kv.val.int(u64)/512),
             .dev => ctx.stat.dev = kv.val.int(u64),
-            .rderr => ctx.fields.rderr = kv.val.major == .simple and kv.val.arg == 21,
+            .rderr => ctx.fields.rderr = kv.val.isTrue(),
             .sub => ctx.fields.sub = kv.val.itemref(ref),
             .ino => ctx.stat.ino = kv.val.int(u64),
             .nlink => ctx.stat.nlink = kv.val.int(u31),
@@ -427,6 +431,61 @@ const Import = struct {
     }
 };
 
+// Resolve an itemref and return a newly allocated entry.
+// Dir.parent and Link.next/prev are left uninitialized.
+pub fn get(ref: u64, alloc: std.mem.Allocator) *model.Entry {
+    const parser = readItem(ref);
+
+    var etype: ?model.EType = null;
+    var name: []const u8 = "";
+    var p = parser;
+    while (p.next()) |kv| {
+        switch (kv.key) {
+            .type => etype = kv.val.etype(),
+            .name => name = kv.val.bytes(),
+            else => kv.val.skip(),
+        }
+        if (etype != null and name.len != 0) break;
+    }
+    if (etype == null or name.len == 0) die();
+
+    // XXX: 'extended' should really depend on whether the info is in the file.
+    var entry = model.Entry.create(alloc, etype.?, main.config.extended, name);
+    entry.next = .{ .ref = std.math.maxInt(u64) };
+    if (entry.dir()) |d| d.sub = .{ .ref = std.math.maxInt(u64) };
+    while (p.next()) |kv| switch (kv.key) {
+        .prev  => entry.next = .{ .ref = kv.val.itemref(ref) },
+        .asize => { if (entry.pack.etype != .dir) entry.size = kv.val.int(u64); },
+        .dsize => { if (entry.pack.etype != .dir) entry.pack.blocks = @intCast(kv.val.int(u64)/512); },
+
+        .rderr => { if (entry.dir()) |d| {
+            if (kv.val.isTrue()) d.pack.err = true
+            else d.pack.suberr = true;
+        } },
+        .dev      => { if (entry.dir()) |d| d.pack.dev = model.devices.getId(kv.val.int(u64)); },
+        .cumasize => entry.size = kv.val.int(u64),
+        .cumdsize => entry.pack.blocks = @intCast(kv.val.int(u64)/512),
+        .shrasize => { if (entry.dir()) |d| d.shared_size = kv.val.int(u64); },
+        .shrdsize => { if (entry.dir()) |d| d.shared_blocks = kv.val.int(u64)/512; },
+        .items    => { if (entry.dir()) |d| d.items = kv.val.int(u32); },
+        .sub      => { if (entry.dir()) |d| d.sub = .{ .ref = kv.val.itemref(ref) }; },
+
+        .ino   => { if (entry.link()) |l| l.ino = kv.val.int(u64); },
+        .nlink => { if (entry.link()) |l| l.pack.nlink = kv.val.int(u31); },
+
+        .uid   => { if (entry.ext()) |e| e.uid = kv.val.int(u32); },
+        .gid   => { if (entry.ext()) |e| e.gid = kv.val.int(u32); },
+        .mode  => { if (entry.ext()) |e| e.mode = kv.val.int(u16); },
+        .mtime => { if (entry.ext()) |e| e.mtime = kv.val.int(u64); },
+        else => kv.val.skip(),
+    };
+    return entry;
+}
+
+pub fn getRoot() u64 {
+    return bigu64(global.index[global.index.len-8..][0..8].*);
+}
+
 // Walk through the directory tree in depth-first order and pass results to sink.zig.
 // Depth-first is required for JSON export, but more efficient strategies are
 // possible for other sinks. Parallel import is also an option, but that's more
@@ -434,7 +493,7 @@ const Import = struct {
 pub fn import() void {
     const sink_threads = sink.createThreads(1);
     var ctx = Import{.sink = &sink_threads[0]};
-    ctx.import(bigu64(global.index[global.index.len-8..][0..8].*), null, 0);
+    ctx.import(getRoot(), null, 0);
     sink.done();
 }
 

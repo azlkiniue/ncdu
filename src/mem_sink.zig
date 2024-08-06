@@ -62,12 +62,12 @@ pub const Dir = struct {
         };
 
         var count: Map.Size = 0;
-        var it = dir.sub;
-        while (it) |e| : (it = e.next) count += 1;
+        var it = dir.sub.ptr;
+        while (it) |e| : (it = e.next.ptr) count += 1;
         self.entries.ensureUnusedCapacity(count) catch unreachable;
 
-        it = dir.sub;
-        while (it) |e| : (it = e.next)
+        it = dir.sub.ptr;
+        while (it) |e| : (it = e.next.ptr)
             self.entries.putAssumeCapacity(e, {});
         return self;
     }
@@ -83,8 +83,8 @@ pub const Dir = struct {
             }
         }
         const e = model.Entry.create(t.arena.allocator(), etype, isext, name);
-        e.next = self.dir.sub;
-        self.dir.sub = e;
+        e.next.ptr = self.dir.sub.ptr;
+        self.dir.sub.ptr = e;
         return e;
     }
 
@@ -136,10 +136,10 @@ pub const Dir = struct {
     pub fn final(self: *Dir, parent: ?*Dir) void {
         // Remove entries we've not seen
         if (self.entries.count() > 0) {
-            var it = &self.dir.sub;
+            var it = &self.dir.sub.ptr;
             while (it.*) |e| {
-                if (self.entries.getKey(e) == e) it.* = e.next
-                else it = &e.next;
+                if (self.entries.getKey(e) == e) it.* = e.next.ptr
+                else it = &e.next.ptr;
             }
         }
         self.entries.deinit();
