@@ -305,7 +305,7 @@ pub const Dir = struct {
             const v = kv.value_ptr;
             d.size +|= v.size;
             d.blocks +|= v.blocks;
-            if (v.nlink > 1 and v.nfound <= v.nlink) {
+            if (v.nlink > 1 and v.nfound < v.nlink) {
                 d.shared_size +|= v.size;
                 d.shared_blocks +|= v.blocks;
             }
