@@ -626,7 +626,7 @@ pub fn main() void {
     }
 }
 
-var event_delay_timer: std.time.Timer = undefined;
+pub var event_delay_timer: std.time.Timer = undefined;
 
 // Draw the screen and handle the next input event.
 // In non-blocking mode, screen drawing is rate-limited to keep this function fast.

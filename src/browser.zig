@@ -29,6 +29,7 @@ var dir_items = std.ArrayList(?*model.Entry).init(main.allocator);
 var dir_max_blocks: u64 = 0;
 var dir_max_size: u64 = 0;
 var dir_has_shared: bool = false;
+var dir_loading: u64 = 0;
 
 // Index into dir_items that is currently selected.
 var cursor_idx: usize = 0;
@@ -133,6 +134,10 @@ fn sortDir(next_sel: u64) void {
 // - config.show_hidden changes
 // - files in this dir have been added or removed
 pub fn loadDir(next_sel: u64) void {
+    // XXX: The current dir listing is wiped before loading the new one, which
+    // causes the screen to flicker a bit when the loading indicator is drawn.
+    // Should we keep the old listing around?
+    main.event_delay_timer.reset();
     _ = dir_alloc.reset(.free_all);
     dir_items.shrinkRetainingCapacity(0);
     dir_refs.shrinkRetainingCapacity(0);
@@ -167,8 +172,12 @@ pub fn loadDir(next_sel: u64) void {
         }
 
         ref = e.next;
+        dir_loading += 1;
+        if ((dir_loading & 65) == 0)
+            main.handleEvent(false, false);
     }
     sortDir(next_sel);
+    dir_loading = 0;
 }
 
 
@@ -831,7 +840,7 @@ pub fn draw() void {
     if (cursor_idx < current_view.top) current_view.top = cursor_idx;
     if (cursor_idx >= current_view.top + numrows) current_view.top = cursor_idx - numrows + 1;
 
-    var i: u32 = 0;
+    var i: u32 = if (dir_loading > 0) numrows else 0;
     var sel_row: u32 = 0;
     while (i < numrows) : (i += 1) {
         if (i+current_view.top >= dir_items.items.len) break;
@@ -848,17 +857,22 @@ pub fn draw() void {
     ui.move(ui.rows-1, 0);
     ui.hline(' ', ui.cols);
     ui.move(ui.rows-1, 0);
-    ui.addch(if (main.config.show_blocks) '*' else ' ');
-    ui.style(if (main.config.show_blocks) .bold_hd else .hd);
-    ui.addstr("Total disk usage: ");
-    ui.addsize(.hd, util.blocksToSize(dir_parent.entry.pack.blocks));
-    ui.style(if (main.config.show_blocks) .hd else .bold_hd);
-    ui.addstr("  ");
-    ui.addch(if (main.config.show_blocks) ' ' else '*');
-    ui.addstr("Apparent size: ");
-    ui.addsize(.hd, dir_parent.entry.size);
-    ui.addstr("   Items: ");
-    ui.addnum(.hd, dir_parent.items);
+    if (dir_loading > 0) {
+        ui.addstr(" Loading... ");
+        ui.addnum(.hd, dir_loading);
+    } else {
+        ui.addch(if (main.config.show_blocks) '*' else ' ');
+        ui.style(if (main.config.show_blocks) .bold_hd else .hd);
+        ui.addstr("Total disk usage: ");
+        ui.addsize(.hd, util.blocksToSize(dir_parent.entry.pack.blocks));
+        ui.style(if (main.config.show_blocks) .hd else .bold_hd);
+        ui.addstr("  ");
+        ui.addch(if (main.config.show_blocks) ' ' else '*');
+        ui.addstr("Apparent size: ");
+        ui.addsize(.hd, dir_parent.entry.size);
+        ui.addstr("   Items: ");
+        ui.addnum(.hd, dir_parent.items);
+    }
 
     switch (state) {
         .main => {},
@@ -906,6 +920,8 @@ fn keyInputSelection(ch: i32, idx: *usize, len: usize, page: u32) bool {
 }
 
 pub fn keyInput(ch: i32) void {
+    if (dir_loading > 0) return;
+
     defer current_view.save();
 
     if (message != null) {
