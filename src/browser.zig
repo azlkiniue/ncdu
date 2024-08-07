@@ -386,7 +386,7 @@ const Row = struct {
 };
 
 var state: enum { main, quit, help, info } = .main;
-var message: ?[:0]const u8 = null;
+var message: ?[]const [:0]const u8 = null;
 
 const quit = struct {
     fn draw() void {
@@ -443,7 +443,7 @@ const info = struct {
         }
         state = .info;
         tab = t;
-        if (tab == .links and links == null) {
+        if (tab == .links and links == null and !main.config.binreader) {
             var list = std.ArrayList(*model.Link).init(main.allocator);
             var l = e.?.link().?;
             while (true) {
@@ -459,6 +459,11 @@ const info = struct {
     }
 
     fn drawLinks(box: ui.Box, row: *u32, rows: u32, cols: u32) void {
+        if (main.config.binreader) {
+            box.move(2, 2);
+            ui.addstr("This feature is not available when reading from file.");
+            return;
+        }
         const numrows = rows -| 4;
         if (links_idx < links_top) links_top = links_idx;
         if (links_idx >= links_top + numrows) links_top = links_idx - numrows + 1;
@@ -581,7 +586,7 @@ const info = struct {
         // for each item. Think it's better to have a dynamic height based on
         // terminal size and scroll if the content doesn't fit.
         const rows = 5 // border + padding + close message
-            + if (tab == .links) 8 else
+            + if (tab == .links and !main.config.binreader) 8 else
               4 // name + type + disk usage + apparent size
             + (if (e.ext() != null) @as(u32, 1) else 0) // last modified
             + (if (e.link() != null) @as(u32, 1) else 0) // link count
@@ -622,7 +627,7 @@ const info = struct {
                 else => {},
             }
         }
-        if (tab == .links) {
+        if (tab == .links and !main.config.binreader) {
             if (keyInputSelection(ch, &links_idx, links.?.items.len, 5))
                 return true;
             if (ch == 10) { // Enter - go to selected entry
@@ -801,7 +806,10 @@ pub fn draw() void {
     ui.addch('?');
     ui.style(.hd);
     ui.addstr(" for help");
-    if (main.config.imported) {
+    if (main.config.binreader) {
+        ui.move(0, ui.cols -| 11);
+        ui.addstr("[from file]");
+    } else if (main.config.imported) {
         ui.move(0, ui.cols -| 10);
         ui.addstr("[imported]");
     } else if (!main.config.can_delete.?) {
@@ -859,10 +867,14 @@ pub fn draw() void {
         .info => info.draw(),
     }
     if (message) |m| {
-        const box = ui.Box.create(6, 60, "Message");
-        box.move(2, 2);
-        ui.addstr(m);
-        box.move(4, 33);
+        const box = ui.Box.create(@intCast(m.len + 5), 60, "Message");
+        i = 2;
+        for (m) |ln| {
+            box.move(i, 2);
+            ui.addstr(ln);
+            i += 1;
+        }
+        box.move(i+1, 33);
         ui.addstr("Press any key to continue");
     }
     if (sel_row > 0) ui.move(sel_row, 0);
@@ -913,8 +925,12 @@ pub fn keyInput(ch: i32) void {
         '?' => state = .help,
         'i' => if (dir_items.items.len > 0) info.set(dir_items.items[cursor_idx], .info),
         'r' => {
-            if (!main.config.can_refresh.?)
-                message = "Directory refresh feature disabled."
+            if (main.config.binreader)
+                message = &.{"Refresh feature is not available when reading from file."}
+            else if (!main.config.can_refresh.? and main.config.imported)
+                message = &.{"Refresh feature disabled.", "Re-run with --enable-refresh to enable this option."}
+            else if (!main.config.can_refresh.?)
+                message = &.{"Directory refresh feature disabled."}
             else {
                 main.state = .refresh;
                 sink.global.sink = .mem;
@@ -923,14 +939,18 @@ pub fn keyInput(ch: i32) void {
         },
         'b' => {
             if (!main.config.can_shell.?)
-                message = "Shell feature disabled."
+                message = &.{"Shell feature disabled.", "Re-run with --enable-shell to enable this option."}
             else
                 main.state = .shell;
         },
         'd' => {
             if (dir_items.items.len == 0) {
-            } else if (!main.config.can_delete.?)
-                message = "Deletion feature disabled."
+            } else if (main.config.binreader)
+                message = &.{"File deletion is not available when reading from file."}
+            else if (!main.config.can_delete.? and main.config.imported)
+                message = &.{"File deletion is disabled.", "Re-run with --enable-delete to enable this option."}
+            else if (!main.config.can_delete.?)
+                message = &.{"File deletion is disabled."}
             else if (dir_items.items[cursor_idx]) |e| {
                 main.state = .delete;
                 const next =
