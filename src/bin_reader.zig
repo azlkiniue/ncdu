@@ -467,7 +467,7 @@ pub fn get(ref: u64, alloc: std.mem.Allocator) *model.Entry {
         .cumdsize => entry.pack.blocks = @intCast(kv.val.int(u64)/512),
         .shrasize => { if (entry.dir()) |d| d.shared_size = kv.val.int(u64); },
         .shrdsize => { if (entry.dir()) |d| d.shared_blocks = kv.val.int(u64)/512; },
-        .items    => { if (entry.dir()) |d| d.items = kv.val.int(u32); },
+        .items    => { if (entry.dir()) |d| d.items = util.castClamp(u32, kv.val.int(u64)); },
         .sub      => { if (entry.dir()) |d| d.sub = .{ .ref = kv.val.itemref(ref) }; },
 
         .ino   => { if (entry.link()) |l| l.ino = kv.val.int(u64); },

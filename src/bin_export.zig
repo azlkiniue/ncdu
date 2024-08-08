@@ -39,7 +39,7 @@ pub const ItemKey = enum(u5) {
     cumdsize =  8, // u64
     shrasize =  9, // u64
     shrdsize = 10, // u64
-    items    = 11, // u32
+    items    = 11, // u64
     sub      = 12, // itemref    only if dir is not empty
     // Only for .link
     ino     = 13, // u64
@@ -217,7 +217,7 @@ pub const Dir = struct {
     lock: std.Thread.Mutex = .{},
     last_sub: u64 = 0,
     stat: sink.Stat,
-    items: u32 = 0,
+    items: u64 = 0,
     size: u64 = 0,
     blocks: u64 = 0,
     err: bool = false,
