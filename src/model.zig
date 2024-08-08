@@ -346,6 +346,7 @@ pub const devices = struct {
         defer lock.unlock();
         const d = lookup.getOrPut(dev) catch unreachable;
         if (!d.found_existing) {
+            if (list.items.len >= std.math.maxInt(DevId)) ui.die("Maximum number of device identifiers exceeded.\n", .{});
             d.value_ptr.* = @as(DevId, @intCast(list.items.len));
             list.append(dev) catch unreachable;
         }
