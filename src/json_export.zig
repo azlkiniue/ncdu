@@ -151,14 +151,22 @@ pub const Writer = struct {
         }
         if (stat.etype == .nonreg) ctx.write(",\"notreg\":true");
         if (main.config.extended) {
-            ctx.write(",\"uid\":");
-            ctx.writeUint(stat.ext.uid);
-            ctx.write(",\"gid\":");
-            ctx.writeUint(stat.ext.gid);
-            ctx.write(",\"mode\":");
-            ctx.writeUint(stat.ext.mode);
-            ctx.write(",\"mtime\":");
-            ctx.writeUint(stat.ext.mtime);
+            if (stat.ext.pack.hasuid) {
+                ctx.write(",\"uid\":");
+                ctx.writeUint(stat.ext.uid);
+            }
+            if (stat.ext.pack.hasgid) {
+                ctx.write(",\"gid\":");
+                ctx.writeUint(stat.ext.gid);
+            }
+            if (stat.ext.pack.hasmode) {
+                ctx.write(",\"mode\":");
+                ctx.writeUint(stat.ext.mode);
+            }
+            if (stat.ext.pack.hasmtime) {
+                ctx.write(",\"mtime\":");
+                ctx.writeUint(stat.ext.mtime);
+            }
         }
     }
 };

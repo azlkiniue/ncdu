@@ -111,6 +111,7 @@ pub const Thread = struct {
         if (expected_len > t.buf.len) ui.die("Error writing data: path too long.\n", .{});
 
         if (block.len > 0) {
+            if (global.file_off >= (1<<40)) ui.die("Export data file has grown too large, please report a bug.\n", .{});
             global.index.items[4..][t.block_num*8..][0..8].* = bigu64((global.file_off << 24) + block.len);
             global.file_off += block.len;
             global.fd.writeAll(block) catch |e|
@@ -120,6 +121,7 @@ pub const Thread = struct {
         t.off = 0;
         t.block_num = @intCast((global.index.items.len - 4) / 8);
         global.index.appendSlice(&[1]u8{0}**8) catch unreachable;
+        if (global.index.items.len + 12 >= (1<<28)) ui.die("Too many data blocks, please report a bug.\n", .{});
     }
 
     fn cborHead(t: *Thread, major: CborMajor, arg: u64) void {
@@ -184,14 +186,22 @@ pub const Thread = struct {
 
     fn itemExt(t: *Thread, stat: *const sink.Stat) void {
         if (!main.config.extended) return;
-        t.itemKey(.uid);
-        t.cborHead(.pos, stat.ext.uid);
-        t.itemKey(.gid);
-        t.cborHead(.pos, stat.ext.gid);
-        t.itemKey(.mode);
-        t.cborHead(.pos, stat.ext.mode);
-        t.itemKey(.mtime);
-        t.cborHead(.pos, stat.ext.mtime);
+        if (stat.ext.pack.hasuid) {
+            t.itemKey(.uid);
+            t.cborHead(.pos, stat.ext.uid);
+        }
+        if (stat.ext.pack.hasgid) {
+            t.itemKey(.gid);
+            t.cborHead(.pos, stat.ext.gid);
+        }
+        if (stat.ext.pack.hasmode) {
+            t.itemKey(.mode);
+            t.cborHead(.pos, stat.ext.mode);
+        }
+        if (stat.ext.pack.hasmtime) {
+            t.itemKey(.mtime);
+            t.cborHead(.pos, stat.ext.mtime);
+        }
     }
 
     fn itemEnd(t: *Thread) void {

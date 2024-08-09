@@ -347,6 +347,7 @@ fn itemkey(ctx: *Ctx, key: []const u8) void {
         'g' => {
             if (eq(u8, key, "gid")) {
                 ctx.stat.ext.gid = ctx.p.uint(u32);
+                ctx.stat.ext.pack.hasgid = true;
                 return;
             }
         },
@@ -365,10 +366,12 @@ fn itemkey(ctx: *Ctx, key: []const u8) void {
         'm' => {
             if (eq(u8, key, "mode")) {
                 ctx.stat.ext.mode = ctx.p.uint(u16);
+                ctx.stat.ext.pack.hasmode = true;
                 return;
             }
             if (eq(u8, key, "mtime")) {
                 ctx.stat.ext.mtime = ctx.p.uint(u64);
+                ctx.stat.ext.pack.hasmtime = true;
                 // Accept decimal numbers, but discard the fractional part because our data model doesn't support it.
                 switch (ctx.p.nextByte()) {
                     '.' =>
@@ -410,6 +413,7 @@ fn itemkey(ctx: *Ctx, key: []const u8) void {
         'u' => {
             if (eq(u8, key, "uid")) {
                 ctx.stat.ext.uid = ctx.p.uint(u32);
+                ctx.stat.ext.pack.hasuid = true;
                 return;
             }
         },

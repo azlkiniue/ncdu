@@ -387,10 +387,10 @@ const Import = struct {
             .sub => ctx.fields.sub = kv.val.itemref(ref),
             .ino => ctx.stat.ino = kv.val.int(u64),
             .nlink => ctx.stat.nlink = kv.val.int(u31),
-            .uid => ctx.stat.ext.uid = kv.val.int(u32),
-            .gid => ctx.stat.ext.gid = kv.val.int(u32),
-            .mode => ctx.stat.ext.mode = kv.val.int(u16),
-            .mtime => ctx.stat.ext.mtime = kv.val.int(u64),
+            .uid => { ctx.stat.ext.uid = kv.val.int(u32); ctx.stat.ext.pack.hasuid = true; },
+            .gid => { ctx.stat.ext.gid = kv.val.int(u32); ctx.stat.ext.pack.hasgid = true; },
+            .mode => { ctx.stat.ext.mode = kv.val.int(u16); ctx.stat.ext.pack.hasmode = true; },
+            .mtime => { ctx.stat.ext.mtime = kv.val.int(u64); ctx.stat.ext.pack.hasmtime = true; },
             else => kv.val.skip(),
         };
 
@@ -439,20 +439,25 @@ pub fn get(ref: u64, alloc: std.mem.Allocator) *model.Entry {
     var etype: ?model.EType = null;
     var name: []const u8 = "";
     var p = parser;
+    var ext = model.Ext{};
     while (p.next()) |kv| {
         switch (kv.key) {
             .type => etype = kv.val.etype(),
             .name => name = kv.val.bytes(),
+            .uid   => { ext.uid = kv.val.int(u32); ext.pack.hasuid = true; },
+            .gid   => { ext.gid = kv.val.int(u32); ext.pack.hasgid = true; },
+            .mode  => { ext.mode = kv.val.int(u16); ext.pack.hasmode = true; },
+            .mtime => { ext.mtime = kv.val.int(u64); ext.pack.hasmtime = true; },
             else => kv.val.skip(),
         }
-        if (etype != null and name.len != 0) break;
     }
     if (etype == null or name.len == 0) die();
 
-    // XXX: 'extended' should really depend on whether the info is in the file.
-    var entry = model.Entry.create(alloc, etype.?, main.config.extended, name);
+    var entry = model.Entry.create(alloc, etype.?, main.config.extended and !ext.isEmpty(), name);
     entry.next = .{ .ref = std.math.maxInt(u64) };
+    if (entry.ext()) |e| e.* = ext;
     if (entry.dir()) |d| d.sub = .{ .ref = std.math.maxInt(u64) };
+    p = parser;
     while (p.next()) |kv| switch (kv.key) {
         .prev  => entry.next = .{ .ref = kv.val.itemref(ref) },
         .asize => { if (entry.pack.etype != .dir) entry.size = kv.val.int(u64); },
@@ -472,11 +477,6 @@ pub fn get(ref: u64, alloc: std.mem.Allocator) *model.Entry {
 
         .ino   => { if (entry.link()) |l| l.ino = kv.val.int(u64); },
         .nlink => { if (entry.link()) |l| l.pack.nlink = kv.val.int(u31); },
-
-        .uid   => { if (entry.ext()) |e| e.uid = kv.val.int(u32); },
-        .gid   => { if (entry.ext()) |e| e.gid = kv.val.int(u32); },
-        .mode  => { if (entry.ext()) |e| e.mode = kv.val.int(u16); },
-        .mtime => { if (entry.ext()) |e| e.mtime = kv.val.int(u64); },
         else => kv.val.skip(),
     };
     return entry;

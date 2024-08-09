@@ -363,8 +363,13 @@ const Row = struct {
         defer self.col += 27;
         ui.move(self.row, self.col+1);
         const ext = if (self.item) |e| e.ext() else dir_parent.entry.ext();
-        if (ext) |e| ui.addts(self.bg, e.mtime)
-        else ui.addstr("                 no mtime");
+        if (ext) |e| {
+            if (e.pack.hasmtime) {
+                ui.addts(self.bg, e.mtime);
+                return;
+            }
+        }
+        ui.addstr("                 no mtime");
     }
 
     fn name(self: *Self) void {
@@ -526,18 +531,24 @@ const info = struct {
         box.move(row.*, 3);
         ui.style(.bold);
         if (e.ext()) |ext| {
-            ui.addstr("Mode: ");
-            ui.style(.default);
-            ui.addmode(ext.mode);
             var buf: [32]u8 = undefined;
-            ui.style(.bold);
-            ui.addstr("  UID: ");
-            ui.style(.default);
-            ui.addstr(std.fmt.bufPrintZ(&buf, "{d:<6}", .{ ext.uid }) catch unreachable);
-            ui.style(.bold);
-            ui.addstr(" GID: ");
-            ui.style(.default);
-            ui.addstr(std.fmt.bufPrintZ(&buf, "{d:<6}", .{ ext.gid }) catch unreachable);
+            if (ext.pack.hasmode) {
+                ui.addstr("Mode: ");
+                ui.style(.default);
+                ui.addmode(ext.mode);
+                ui.style(.bold);
+            }
+            if (ext.pack.hasuid) {
+                ui.addstr("  UID: ");
+                ui.style(.default);
+                ui.addstr(std.fmt.bufPrintZ(&buf, "{d:<6}", .{ ext.uid }) catch unreachable);
+                ui.style(.bold);
+            }
+            if (ext.pack.hasgid) {
+                ui.addstr(" GID: ");
+                ui.style(.default);
+                ui.addstr(std.fmt.bufPrintZ(&buf, "{d:<6}", .{ ext.gid }) catch unreachable);
+            }
         } else {
             ui.addstr("Type: ");
             ui.style(.default);
@@ -552,11 +563,13 @@ const info = struct {
 
         // Last modified
         if (e.ext()) |ext| {
-            box.move(row.*, 3);
-            ui.style(.bold);
-            ui.addstr("Last modified: ");
-            ui.addts(.default, ext.mtime);
-            row.* += 1;
+            if (ext.pack.hasmtime) {
+                box.move(row.*, 3);
+                ui.style(.bold);
+                ui.addstr("Last modified: ");
+                ui.addts(.default, ext.mtime);
+                row.* += 1;
+            }
         }
 
         // Disk usage & Apparent size

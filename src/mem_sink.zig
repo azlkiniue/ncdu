@@ -106,7 +106,7 @@ pub const Dir = struct {
             }
         }
 
-        const e = self.getEntry(t, stat.etype, main.config.extended, name);
+        const e = self.getEntry(t, stat.etype, main.config.extended and !stat.ext.isEmpty(), name);
         e.pack.blocks = stat.blocks;
         e.size = stat.size;
         if (e.dir()) |d| {
@@ -172,7 +172,7 @@ pub const Dir = struct {
 
 pub fn createRoot(path: []const u8, stat: *const sink.Stat) Dir {
     const p = global.root orelse blk: {
-        model.root = model.Entry.create(main.allocator, .dir, main.config.extended, path).dir().?;
+        model.root = model.Entry.create(main.allocator, .dir, main.config.extended and !stat.ext.isEmpty(), path).dir().?;
         break :blk model.root;
     };
     sink.global.state = .zeroing;
@@ -185,6 +185,7 @@ pub fn createRoot(path: []const u8, stat: *const sink.Stat) Dir {
     p.entry.pack.blocks = stat.blocks;
     p.entry.size = stat.size;
     p.pack.dev = model.devices.getId(stat.dev);
+    if (p.entry.ext()) |e| e.* = stat.ext;
     return Dir.init(p);
 }
 

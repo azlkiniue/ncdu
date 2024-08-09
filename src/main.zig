@@ -578,7 +578,7 @@ pub fn main() void {
     if (import_file) |f| {
         readImport(f) catch |e| ui.die("Error reading file '{s}': {s}.\n", .{f, ui.errorString(e)});
         config.imported = true;
-        if (config.binreader and export_json != null or export_bin != null)
+        if (config.binreader and (export_json != null or export_bin != null))
             bin_reader.import();
     } else {
         var buf = [_]u8{0} ** (std.fs.MAX_PATH_BYTES+1);

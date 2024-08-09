@@ -325,10 +325,23 @@ pub const File = extern struct {
 };
 
 pub const Ext = extern struct {
+    pack: Pack = .{},
     mtime: u64 align(1) = 0,
     uid: u32 align(1) = 0,
     gid: u32 align(1) = 0,
     mode: u16 align(1) = 0,
+
+    pub const Pack = packed struct(u8) {
+        hasmtime: bool = false,
+        hasuid: bool = false,
+        hasgid: bool = false,
+        hasmode: bool = false,
+        _pad: u4 = 0,
+    };
+
+    pub fn isEmpty(e: *const Ext) bool {
+        return !e.pack.hasmtime and !e.pack.hasuid and !e.pack.hasgid and !e.pack.hasmode;
+    }
 };
 
 
