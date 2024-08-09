@@ -104,7 +104,6 @@ sub cbordata($blknum, $data) {
         my($val, $len) = $cbor->decode_prefix(substr $data, $off);
         my $itemref = ($blknum << 24) | $off;
         $off += $len;
-        next if !defined $val;
         $nitems++;
 
         # Basic validation of the CBOR data. Doesn't validate that every value

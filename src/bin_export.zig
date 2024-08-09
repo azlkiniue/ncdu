@@ -120,8 +120,6 @@ pub const Thread = struct {
         t.off = 0;
         t.block_num = @intCast((global.index.items.len - 4) / 8);
         global.index.appendSlice(&[1]u8{0}**8) catch unreachable;
-        // Start the first block with a CBOR 'null', so that itemrefs can never be 0.
-        if (t.block_num == 0) t.cborHead(.simple, 22);
     }
 
     fn cborHead(t: *Thread, major: CborMajor, arg: u64) void {
@@ -156,18 +154,18 @@ pub const Thread = struct {
         t.cborHead(.pos, @intFromEnum(key));
     }
 
-    fn itemRef(t: *Thread, key: ItemKey, ref: u64) void {
-        if (ref == 0) return;
+    fn itemRef(t: *Thread, key: ItemKey, ref: ?u64) void {
+        const r = ref orelse return;
         t.itemKey(key);
         // Full references compress like shit and most of the references point
         // into the same block, so optimize that case by using a negative
         // offset instead.
-        if ((ref >> 24) == t.block_num) t.cborHead(.neg, t.itemref - ref - 1)
-        else t.cborHead(.pos, ref);
+        if ((r >> 24) == t.block_num) t.cborHead(.neg, t.itemref - r - 1)
+        else t.cborHead(.pos, r);
     }
 
     // Reserve space for a new item, write out the type, prev and name fields and return the itemref.
-    fn itemStart(t: *Thread, itype: model.EType, prev_item: u64, name: []const u8) u64 {
+    fn itemStart(t: *Thread, itype: model.EType, prev_item: ?u64, name: []const u8) u64 {
         const min_len = name.len + MAX_ITEM_LEN;
         if (t.off + min_len > t.buf.len) t.flush(min_len);
 
@@ -215,7 +213,7 @@ pub const Dir = struct {
     // last_item into an atomic integer and other fields could be split up for
     // subdir use.
     lock: std.Thread.Mutex = .{},
-    last_sub: u64 = 0,
+    last_sub: ?u64 = null,
     stat: sink.Stat,
     items: u64 = 0,
     size: u64 = 0,
