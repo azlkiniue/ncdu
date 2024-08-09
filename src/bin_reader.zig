@@ -508,8 +508,8 @@ pub fn open(fd: std.fs.File) !void {
     var buf: [4]u8 = undefined;
     if (try fd.preadAll(&buf, size - 4) != 4) return error.EndOfStream;
     const index_header = bigu32(buf);
-    if ((index_header >> 24) != 2 or (index_header & 7) != 0) die();
-    const len = (index_header & 0x00ffffff) - 8; // excluding block header & footer
+    if ((index_header >> 28) != 1 or (index_header & 7) != 0) die();
+    const len = (index_header & 0x0fffffff) - 8; // excluding block header & footer
     if (len >= size) die();
     global.index = main.allocator.alloc(u8, len) catch unreachable;
     if (try fd.preadAll(global.index, size - len - 4) != global.index.len) return error.EndOfStream;

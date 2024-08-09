@@ -72,8 +72,10 @@ my @itemkeys = qw/
 
 sub datablock($prefix, $off, $blklen, $content) {
     die "$prefix: Data block too small\n" if length $content < 8;
+    die "$prefix: Data block too large\n" if length $content >= (1<<24);
 
     my($num, $rawlen) = unpack 'NN', $content;
+    die "$prefix: Uncompressed data block size too large\n" if $rawlen >= (1<<24);
     die sprintf "%s: Duplicate block id %d (first at %010x)", $prefix, $num, $datablocks{$num}>>24 if $datablocks{$num};
     $datablocks{$num} = ($off << 24) | $blklen;
 
@@ -156,17 +158,17 @@ while (1) {
     my $prefix = sprintf '%010x', $off;
     die "$prefix Input too short, expected block header\n" if 4 != read STDIN, my $blkhead, 4;
     $blkhead = unpack 'N', $blkhead;
-    my $blkid = $blkhead >> 24;
-    my $blklen = $blkhead & 0xffffff;
+    my $blkid = $blkhead >> 28;
+    my $blklen = $blkhead & 0x0fffffff;
 
     $prefix .= "[$blklen]";
     die "$prefix: Short read on block content\n" if $blklen - 8 != read STDIN, my $content, $blklen - 8;
     die "$prefix: Input too short, expected block footer\n" if 4 != read STDIN, my $blkfoot, 4;
     die "$prefix: Block footer does not match header\n" if $blkhead != unpack 'N', $blkfoot;
 
-    if ($blkid == 1) {
+    if ($blkid == 0) {
         datablock($prefix, $off, $blklen, $content);
-    } elsif ($blkid == 2) {
+    } elsif ($blkid == 1) {
         indexblock($prefix, $content);
         last;
     } else {

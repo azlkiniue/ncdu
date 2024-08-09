@@ -62,7 +62,7 @@ inline fn bigu16(v: u16) [2]u8 { return @bitCast(std.mem.nativeToBig(u16, v)); }
 inline fn bigu32(v: u32) [4]u8 { return @bitCast(std.mem.nativeToBig(u32, v)); }
 inline fn bigu64(v: u64) [8]u8 { return @bitCast(std.mem.nativeToBig(u64, v)); }
 
-inline fn blockHeader(id: u8, len: u32) [4]u8 { return bigu32((@as(u32, id) << 24) | len); }
+inline fn blockHeader(id: u4, len: u28) [4]u8 { return bigu32((@as(u32, id) << 28) | len); }
 
 inline fn cborByte(major: CborMajor, arg: u5) u8 { return (@as(u8, @intFromEnum(major)) << 5) | arg; }
 
@@ -92,11 +92,11 @@ pub const Thread = struct {
         if (t.block_num == std.math.maxInt(u32) or t.off <= 1) return "";
 
         const bodylen = compressZstd(t.buf[0..t.off], t.tmp[12..]);
-        const blocklen: u32 = @intCast(bodylen + 16);
-        t.tmp[0..4].* = blockHeader(1, blocklen);
+        const blocklen: u28 = @intCast(bodylen + 16);
+        t.tmp[0..4].* = blockHeader(0, blocklen);
         t.tmp[4..8].* = bigu32(t.block_num);
         t.tmp[8..12].* = bigu32(@intCast(t.off));
-        t.tmp[12+bodylen..][0..4].* = blockHeader(1, blocklen);
+        t.tmp[12+bodylen..][0..4].* = blockHeader(0, blocklen);
         return t.tmp[0..blocklen];
     }
 
@@ -416,8 +416,8 @@ pub fn done(threads: []sink.Thread) void {
     while (std.mem.endsWith(u8, global.index.items, &[1]u8{0}**8))
         global.index.shrinkRetainingCapacity(global.index.items.len - 8);
     global.index.appendSlice(&bigu64(global.root_itemref)) catch unreachable;
-    global.index.appendSlice(&blockHeader(2, @intCast(global.index.items.len + 4))) catch unreachable;
-    global.index.items[0..4].* = blockHeader(2, @intCast(global.index.items.len));
+    global.index.appendSlice(&blockHeader(1, @intCast(global.index.items.len + 4))) catch unreachable;
+    global.index.items[0..4].* = blockHeader(1, @intCast(global.index.items.len));
     global.fd.writeAll(global.index.items) catch |e|
         ui.die("Error writing to file: {s}.\n", .{ ui.errorString(e) });
     global.index.clearAndFree();
