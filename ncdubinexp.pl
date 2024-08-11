@@ -74,21 +74,20 @@ sub datablock($prefix, $off, $blklen, $content) {
     die "$prefix: Data block too small\n" if length $content < 8;
     die "$prefix: Data block too large\n" if length $content >= (1<<24);
 
-    my($num, $rawlen) = unpack 'NN', $content;
-    die "$prefix: Uncompressed data block size too large\n" if $rawlen >= (1<<24);
+    my $num = unpack 'N', $content;
     die sprintf "%s: Duplicate block id %d (first at %010x)", $prefix, $num, $datablocks{$num}>>24 if $datablocks{$num};
     $datablocks{$num} = ($off << 24) | $blklen;
 
-    my $compressed = substr $content, 8;
-    $printblocks && printf "%s: data block %d  rawlen %d (%.2f)\n", $prefix, $num, $rawlen, $rawlen/(length($compressed))*100;
-
-    $datablock_len += length($compressed);
-    $rawdata_len += $rawlen;
-
+    my $compressed = substr $content, 4;
     my $rawdata = decompress($compressed);
     die "$prefix: Block id $num failed decompression\n" if !defined $rawdata;
-    die sprintf "%s: Block id %d decompressed to %d bytes but expected %d\n",
-        $prefix, $num, length($rawdata), $rawlen if $rawlen != length $rawdata;
+    die "$prefix: Uncompressed data block size too large\n" if length $rawdata >= (1<<24);
+
+    $printblocks && printf "%s: data block %d  rawlen %d (%.2f)\n", $prefix, $num, length($rawdata), length($compressed)/length($rawdata)*100;
+
+    $datablock_len += length($compressed);
+    $rawdata_len += length($rawdata);
+
     cbordata($num, $rawdata);
 }
 
@@ -231,7 +230,7 @@ if ($printstats) {
     printf "     Total items: %d\n", $nitems;
     printf "    Total blocks: %d\n", $nblocks;
     printf " Items per block: %.1f (%d .. %d)\n", $nitems / $nblocks, $minitemsperblock, $maxitemsperblock;
-    printf "  Avg block size: %d compressed, %d raw (%.1f)\n", $datablock_len/$nblocks, $rawdata_len/$nblocks, $rawdata_len/$datablock_len*100;
+    printf "  Avg block size: %d compressed, %d raw (%.1f)\n", $datablock_len/$nblocks, $rawdata_len/$nblocks, $datablock_len/$rawdata_len*100;
     printf "   Avg item size: %.1f compressed, %.1f raw\n", $datablock_len/$nitems, $rawdata_len/$nitems;
 
     @dirblocks = sort { $b->[2] <=> $a->[2] } @dirblocks;

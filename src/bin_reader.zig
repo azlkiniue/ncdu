@@ -10,6 +10,8 @@ const ui = @import("ui.zig");
 const bin_export = @import("bin_export.zig");
 
 extern fn ZSTD_decompress(dst: ?*anyopaque, dstCapacity: usize, src: ?*const anyopaque, compressedSize: usize) usize;
+extern fn ZSTD_getFrameContentSize(src: ?*const anyopaque, srcSize: usize) c_ulonglong;
+
 
 const CborMajor = bin_export.CborMajor;
 const ItemKey = bin_export.ItemKey;
@@ -90,19 +92,22 @@ fn readBlock(num: u32) []const u8 {
 
     if (num > global.index.len/8 - 1) die();
     const offlen = bigu64(global.index[num*8..][0..8].*);
-    if ((offlen & 0xffffff) < 16) die();
+    const off = offlen >> 24;
+    const len = offlen & 0xffffff;
+    if (len <= 12) die();
 
-    const buf = main.allocator.alloc(u8, @intCast((offlen & 0xffffff) - 12)) catch unreachable;
+    // Only read the compressed data part, assume block header, number and footer are correct.
+    const buf = main.allocator.alloc(u8, @intCast(len - 12)) catch unreachable;
     defer main.allocator.free(buf);
-    const rdlen = global.fd.preadAll(buf, (offlen >> 24) + 8)
+    const rdlen = global.fd.preadAll(buf, off + 8)
         catch |e| ui.die("Error reading from file: {s}\n", .{ui.errorString(e)});
     if (rdlen != buf.len) die();
 
-    const rawlen = bigu32(buf[0..4].*);
-    if (rawlen >= (1<<24)) die();
-    block.data = main.allocator.alloc(u8, rawlen) catch unreachable;
+    const rawlen = ZSTD_getFrameContentSize(buf.ptr, buf.len);
+    if (rawlen <= 0 or rawlen >= (1<<24)) die();
+    block.data = main.allocator.alloc(u8, @intCast(rawlen)) catch unreachable;
 
-    const res = ZSTD_decompress(block.data.ptr, block.data.len, buf[4..].ptr, buf.len - 4);
+    const res = ZSTD_decompress(block.data.ptr, block.data.len, buf.ptr, buf.len);
     if (res != block.data.len) ui.die("Error decompressing block {} (expected {} got {})\n", .{ num, block.data.len, res });
 
     return block.data;

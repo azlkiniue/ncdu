@@ -110,15 +110,14 @@ pub const Thread = struct {
         var out = std.ArrayList(u8).init(main.allocator);
         if (t.block_num == std.math.maxInt(u32) or t.off == 0) return out;
 
-        out.ensureTotalCapacityPrecise(16 + compressBound(t.off)) catch unreachable;
+        out.ensureTotalCapacityPrecise(12 + compressBound(t.off)) catch unreachable;
         out.items.len = out.capacity;
-        const bodylen = compressZstd(t.buf[0..t.off], out.items[12..]);
-        out.items.len = 16 + bodylen;
+        const bodylen = compressZstd(t.buf[0..t.off], out.items[8..]);
+        out.items.len = 12 + bodylen;
 
         out.items[0..4].* = blockHeader(0, @intCast(out.items.len));
         out.items[4..8].* = bigu32(t.block_num);
-        out.items[8..12].* = bigu32(@intCast(t.off));
-        out.items[12+bodylen..][0..4].* = blockHeader(0, @intCast(out.items.len));
+        out.items[8+bodylen..][0..4].* = blockHeader(0, @intCast(out.items.len));
         return out;
     }
 
