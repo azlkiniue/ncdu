@@ -85,6 +85,7 @@ static-%.tar.gz:
 	cd static-$* && ${ZIG} build-exe -target $*\
 		-Iinst/include -Iinst/include/ncursesw -Izstd -lc inst/lib/libncursesw.a zstd/libzstd.a\
 		--cache-dir zig-cache -static -fstrip -O ReleaseFast ../src/main.zig
+	strip -R .eh_frame -R .eh_frame_hdr static-$*/main
 	cd static-$* && mv main ncdu && tar -czf ../static-$*.tar.gz ncdu
 	rm -rf static-$*
 
