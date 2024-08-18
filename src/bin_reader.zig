@@ -118,7 +118,7 @@ const CborReader = struct {
     buf: []const u8,
 
     fn head(r: *CborReader) CborVal {
-        if (r.buf.len < 0) die();
+        if (r.buf.len < 1) die();
         var v = CborVal{
             .rd = r,
             .major = @enumFromInt(r.buf[0] >> 5),
