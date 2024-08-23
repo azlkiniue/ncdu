@@ -242,7 +242,7 @@ const CborVal = struct {
     fn itemref(v: *const CborVal, cur: u64) u64 {
         if (v.major == .pos) return v.arg;
         if (v.major == .neg) {
-            if (v.arg > (1<<24)) die();
+            if (v.arg >= (cur & 0xffffff)) die();
             return cur - v.arg - 1;
         }
         return die();
@@ -357,7 +357,7 @@ fn readItem(ref: u64) ItemParser {
     global.lastitem = ref;
     if (ref >= (1 << (24 + 32))) die();
     const block = readBlock(@intCast(ref >> 24));
-    if ((ref & 0xffffff) > block.len) die();
+    if ((ref & 0xffffff) >= block.len) die();
     return ItemParser.init(block[@intCast(ref & 0xffffff)..]);
 }
 
