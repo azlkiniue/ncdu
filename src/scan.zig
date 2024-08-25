@@ -12,14 +12,7 @@ const c_statfs = @cImport(@cInclude("sys/vfs.h"));
 
 
 // This function only works on Linux
-fn isKernfs(dir: std.fs.Dir, dev: u64) bool {
-    const state = struct {
-        var lock: std.Thread.Mutex = .{};
-        var cache: std.AutoHashMap(u64,bool) = std.AutoHashMap(u64,bool).init(main.allocator);
-    };
-    state.lock.lock();
-    defer state.lock.unlock();
-    if (state.cache.get(dev)) |e| return e;
+fn isKernfs(dir: std.fs.Dir) bool {
     var buf: c_statfs.struct_statfs = undefined;
     if (c_statfs.fstatfs(dir.fd, &buf) != 0) return false; // silently ignoring errors isn't too nice.
     const iskern = switch (util.castTruncate(u32, buf.f_type)) {
@@ -39,7 +32,6 @@ fn isKernfs(dir: std.fs.Dir, dev: u64) bool {
         => true,
         else => false,
     };
-    state.cache.put(dev, iskern) catch {};
     return iskern;
 }
 
@@ -247,7 +239,7 @@ const Thread = struct {
         if (@import("builtin").os.tag == .linux
             and main.config.exclude_kernfs
             and stat.dev != dir.dev
-            and isKernfs(edir, stat.dev)
+            and isKernfs(edir)
         ) {
             edir.close();
             dir.sink.addSpecial(t.sink, name, .kernfs);
