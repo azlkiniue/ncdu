@@ -6,6 +6,7 @@
 .Sh NAME
 .Nm ncdu
 .Nd NCurses Disk Usage
+.
 .Sh SYNOPSIS
 .Nm
 .Op Fl f Ar file
@@ -45,11 +46,13 @@
 .Op Fl h , \-help
 .Nm
 .Op Fl v , V , \-version
+.
 .Sh DESCRIPTION
 .Nm
 (NCurses Disk Usage) is an interactive curses-based version of the well-known
 .Xr du 1 ,
 and provides a fast way to see what directories are using your disk space.
+.
 .Sh OPTIONS
 .Ss Mode Selection
 .Bl -tag -width Ds
@@ -60,10 +63,13 @@ Print version and quit.
 .It Fl f Ar file
 Load the given file, which has earlier been created with the
 .Fl o
+or
+.Fl O
 flag.
 If
 .Ar file
 is equivalent to '\-', the file is read from standard input.
+Reading from standard input is only supported for the JSON format.
 .Pp
 For the sake of preventing a screw-up, the current version of
 .Nm
@@ -74,7 +80,7 @@ will be disabled.
 .It Ar dir
 Scan the given directory.
 .It Fl o Ar file
-Export all necessary information to
+Export the directory tree in JSON format to
 .Ar file
 instead of opening the browser interface.
 If
@@ -88,6 +94,22 @@ directory with many files.
 uncompressed, or a little over 100 KiB when compressed with gzip.
 This scales linearly, so be prepared to handle a few tens of megabytes when
 dealing with millions of files.
+.Pp
+When running a multi-threaded scan or when scanning a directory tree that may
+not fit in memory, consider using
+.Fl O
+instead.
+.It Fl O Ar file
+Export the directory tree in binary format to
+.Ar file
+instead of opening the browser interface.
+If
+.Ar file
+is '\-', the data is written to standard output.
+The binary format has built-in compression, supports low-memory multi-threaded
+export (in combination with
+.Fl t )
+and can be browsed without importing the entire directory tree into memory.
 .It Fl e , \-extended , \-no\-extended
 Enable/disable extended information mode.
 This will, in addition to the usual file information, also read the ownership,
@@ -106,6 +128,7 @@ using 'm' and 'M', respectively.
 .It Fl \-ignore\-config
 Do not attempt to load any configuration files.
 .El
+.
 .Ss Scan Options
 These options affect the scanning progress, they have no effect when importing
 directory information from a file.
@@ -149,16 +172,27 @@ The exact counting behavior of this flag is subject to change in the future.
 The complete list of currently known pseudo filesystems is: binfmt, bpf, cgroup,
 cgroup2, debug, devpts, proc, pstore, security, selinux, sys, trace.
 .It Fl t , \-threads Ar num
-Number of threads to use when scanning the filesystem, currently defaults to 1.
+Number of threads to use when scanning the filesystem, defaults to 1.
 .Pp
-In single-threaded mode, the export function (see
+In single-threaded mode, the JSON export (see
 .Fl o )
 can operate with very little memory, but in multi-threaded mode the entire
 directory tree is first constructed in memory and written out after the
 filesystem scan has completed,
 This causes a delay in output and requires significantly more memory for large
 directory trees.
+The binary format (see
+.Fl O )
+does not have this problem and supports efficient exporting with any number of
+threads.
+.It Fl \-compress\-level Ar num
+Set the Zstandard compression level when using
+.Fl O
+to create a binary export.
+Valid values are 1 (fastest) to 19 (slowest).
+Defaults to 4.
 .El
+.
 .Ss Interface Options
 .Bl -tag -width Ds
 .It Fl 0
@@ -307,6 +341,7 @@ color scheme that also works in terminals with a light background.
 The default is
 .Ar off .
 .El
+.
 .Sh CONFIGURATION
 .Nm
 can be configured by placing command-line options in
@@ -335,6 +370,7 @@ Example configuration file:
 # Exclude .git directories
 \-\-exclude .git
 .Ed
+.
 .Sh KEYS
 .Bl -tag -width Ds
 .It ?
@@ -421,6 +457,7 @@ itself does not (currently) warn about or prevent this situation.
 .It q
 Quit
 .El
+.
 .Sh FILE FLAGS
 Entries in the browser interface may be prefixed by a one\-character flag.
 These flags have the following meaning:
@@ -444,6 +481,7 @@ Same file was already counted (hard link).
 .It e
 Empty directory.
 .El
+.
 .Sh EXAMPLES
 To scan and browse the directory you're currently in, all you need is a simple:
 .Dl ncdu
@@ -483,6 +521,7 @@ the local system without any network latency, and
 .Nm
 does not keep the entire directory structure in memory when exporting, so this
 won't consume much memory on the remote system.
+.
 .Sh SEE ALSO
 .Xr du 1 ,
 .Xr tree 1 .
@@ -490,13 +529,15 @@ won't consume much memory on the remote system.
 .Nm
 has a website:
 .Lk https://dev.yorhel.nl/ncdu
+.
 .Sh AUTHORS
 Written by
 .An Yorhel Aq Mt projects@yorhel.nl
+.
 .Sh BUGS
 Directory hard links and firmlinks (MacOS) are not supported.
-They are not detected as being hard links, and will thus get scanned and
-counted multiple times.
+They are not detected as being hard links and will thus get scanned and counted
+multiple times.
 .Pp
 Some minor glitches may appear when displaying filenames that contain multibyte
 or multicolumn characters.
