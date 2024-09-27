@@ -1,6 +1,6 @@
 .\" SPDX-FileCopyrightText: Yorhel <projects@yorhel.nl>
 .\" SPDX-License-Identifier: MIT
-.Dd April 20, 2024
+.Dd September 27, 2024
 .Dt NCDU 1
 .Os
 .Sh NAME
@@ -11,6 +11,7 @@
 .Nm
 .Op Fl f Ar file
 .Op Fl o Ar file
+.Op Fl O Ar file
 .Op Fl e , \-extended , \-no\-extended
 .Op Fl \-ignore\-config
 .Op Fl x , \-one\-file\-system , \-cross\-file\-system
@@ -20,6 +21,7 @@
 .Op Fl L , \-follow\-symlinks , \-no\-follow\-symlinks
 .Op Fl \-include\-kernfs , \-exclude\-kernfs
 .Op Fl t , \-threads Ar num
+.Op Fl \-compress\-level Ar num
 .Op Fl 0 , 1 , 2
 .Op Fl q , \-slow\-ui\-updates , \-fast\-ui\-updates
 .Op Fl \-enable\-shell , \-disable\-shell
