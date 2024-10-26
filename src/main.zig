@@ -81,6 +81,7 @@ pub const config = struct {
     pub var exclude_patterns: std.ArrayList([:0]const u8) = std.ArrayList([:0]const u8).init(allocator);
     pub var threads: usize = 1;
     pub var complevel: u8 = 4;
+    pub var compress: bool = false;
 
     pub var update_delay: u64 = 100*std.time.ns_per_ms;
     pub var scan_ui: ?enum { none, line, full } = null;
@@ -276,6 +277,8 @@ fn argConfig(args: *Args, opt: Args.Option) bool {
     else if (opt.is("--include-caches")) config.exclude_caches = false
     else if (opt.is("--exclude-kernfs")) config.exclude_kernfs = true
     else if (opt.is("--include-kernfs")) config.exclude_kernfs = false
+    else if (opt.is("-c") or opt.is("--compress")) config.compress = true
+    else if (opt.is("--no-compress")) config.compress = false
     else if (opt.is("--compress-level")) {
         const val = args.arg();
         config.complevel = std.fmt.parseInt(u8, val, 10) catch ui.die("Invalid number for --compress-level: {s}.\n", .{val});
