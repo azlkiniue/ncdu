@@ -18,7 +18,7 @@ const browser = @import("browser.zig");
 const delete = @import("delete.zig");
 const util = @import("util.zig");
 const exclude = @import("exclude.zig");
-const c = @cImport(@cInclude("locale.h"));
+const c = @import("c.zig").c;
 
 test "imports" {
     _ = model;
@@ -634,14 +634,14 @@ pub fn handleEvent(block: bool, force_draw: bool) void {
     while (ui.oom_threads.load(.monotonic) > 0) ui.oom();
 
     if (block or force_draw or event_delay_timer.read() > config.update_delay) {
-        if (ui.inited) _ = ui.c.erase();
+        if (ui.inited) _ = c.erase();
         switch (state) {
             .scan, .refresh => sink.draw(),
             .browse => browser.draw(),
             .delete => delete.draw(),
             .shell => unreachable,
         }
-        if (ui.inited) _ = ui.c.refresh();
+        if (ui.inited) _ = c.refresh();
         event_delay_timer.reset();
     }
     if (!ui.inited) {
