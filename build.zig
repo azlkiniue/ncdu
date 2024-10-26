@@ -44,6 +44,7 @@ pub fn build(b: *std.Build) void {
     });
     unit_tests.pie = pie;
     unit_tests.root_module.linkSystemLibrary("ncursesw", .{});
+    unit_tests.root_module.linkSystemLibrary("libzstd", .{});
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
 

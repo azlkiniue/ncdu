@@ -7,6 +7,56 @@ const util = @import("util.zig");
 const model = @import("model.zig");
 const sink = @import("sink.zig");
 const ui = @import("ui.zig");
+const c = @import("c.zig").c;
+
+
+const ZstdReader = struct {
+    ctx: ?*c.ZSTD_DStream,
+    in: c.ZSTD_inBuffer,
+    // Assumption: ZSTD_decompressStream() can always make progress as long as
+    // 1/8 of this buffer is filled.
+    inbuf: [c.ZSTD_BLOCKSIZE_MAX + 16]u8, // This ZSTD_DStreamInSize() + a little bit extra
+
+    fn create(head: []const u8) *ZstdReader {
+        const r = main.allocator.create(ZstdReader) catch unreachable;
+        @memcpy(r.inbuf[0..head.len], head);
+        r.in = .{
+            .src = &r.inbuf,
+            .size = head.len,
+            .pos = 0,
+        };
+        while (true) {
+            r.ctx = c.ZSTD_createDStream();
+            if (r.ctx != null) break;
+            ui.oom();
+        }
+        return r;
+    }
+
+    fn destroy(r: *ZstdReader) void {
+        _ = c.ZSTD_freeDStream(r.ctx);
+        main.allocator.destroy(r);
+    }
+
+    fn read(r: *ZstdReader, f: std.fs.File, out: []u8) !usize {
+        if (r.in.size - r.in.pos < r.inbuf.len / 8) {
+            std.mem.copyForwards(u8, &r.inbuf, r.inbuf[r.in.pos..][0..r.in.size - r.in.pos]);
+            r.in.size -= r.in.pos;
+            r.in.pos = 0;
+            r.in.size += try f.read(r.inbuf[r.in.size..]);
+        }
+        var arg = c.ZSTD_outBuffer{
+            .dst = out.ptr,
+            .size = out.len,
+            .pos = 0,
+        };
+        const v = c.ZSTD_decompressStream(r.ctx, &arg, &r.in);
+        if (c.ZSTD_isError(v) != 0) return error.ZstdDecompressError;
+        // No output implies that the input buffer has been fully consumed.
+        if (arg.pos == 0 and r.in.pos != r.in.size) return error.ZstdDecompressError;
+        return arg.pos;
+    }
+};
 
 
 // Using a custom JSON parser here because, while std.json is great, it does
@@ -16,6 +66,7 @@ const ui = @import("ui.zig");
 
 const Parser = struct {
     rd: std.fs.File,
+    zstd: ?*ZstdReader = null,
     rdoff: usize = 0,
     rdsize: usize = 0,
     byte: u64 = 1,
@@ -36,9 +87,10 @@ const Parser = struct {
     fn fill(p: *Parser) void {
         @setCold(true);
         p.rdoff = 0;
-        p.rdsize = p.rd.read(&p.buf) catch |e| switch (e) {
+        p.rdsize = (if (p.zstd) |z| z.read(p.rd, &p.buf) else p.rd.read(&p.buf)) catch |e| switch (e) {
             error.IsDir => p.die("not a file"), // should be detected at open() time, but no flag for that...
             error.SystemResources => p.die("out of memory"),
+            error.ZstdDecompressError => p.die("decompression error"),
             else => p.die("I/O error"),
         };
     }
@@ -475,8 +527,15 @@ pub fn import(fd: std.fs.File, head: []const u8) void {
     const sink_threads = sink.createThreads(1);
     defer sink.done();
 
-    var p = Parser{.rd = fd, .rdsize = head.len};
-    @memcpy(p.buf[0..head.len], head);
+    var p = Parser{.rd = fd};
+    defer if (p.zstd) |z| z.destroy();
+
+    if (head.len >= 4 and std.mem.eql(u8, head[0..4], "\x28\xb5\x2f\xfd")) {
+        p.zstd = ZstdReader.create(head);
+    } else {
+        p.rdsize = head.len;
+        @memcpy(p.buf[0..head.len], head);
+    }
     p.array();
     if (p.uint(u16) != 1) p.die("incompatible major format version");
     if (!p.elem(false)) p.die("expected array element");
