@@ -390,7 +390,7 @@ pub const Dir = struct {
             p.last_sub = t.itemStart(.dir, p.last_sub, name);
         } else {
             d.countLinks(null);
-            global.root_itemref = t.itemStart(.dir, 0, name);
+            global.root_itemref = t.itemStart(.dir, null, name);
         }
         d.inodes.deinit();
 
