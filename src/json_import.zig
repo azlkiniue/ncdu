@@ -151,9 +151,16 @@ const Parser = struct {
                     'r' => if (n < buf.len) { buf[n] = 0xd; n += 1; },
                     't' => if (n < buf.len) { buf[n] = 0x9; n += 1; },
                     'u' => {
-                        const char = (p.hexdig()<<12) + (p.hexdig()<<8) + (p.hexdig()<<4) + p.hexdig();
+                        const first = (p.hexdig()<<12) + (p.hexdig()<<8) + (p.hexdig()<<4) + p.hexdig();
+                        var unit = @as(u21, first);
+                        if (std.unicode.utf16IsLowSurrogate(first)) p.die("Unexpected low surrogate");
+                        if (std.unicode.utf16IsHighSurrogate(first)) {
+                            p.expectLit("\\u");
+                            const second = (p.hexdig()<<12) + (p.hexdig()<<8) + (p.hexdig()<<4) + p.hexdig();
+                            unit = std.unicode.utf16DecodeSurrogatePair(&.{first, second}) catch p.die("Invalid low surrogate");
+                        }
                         if (n + 6 < buf.len)
-                            n += std.unicode.utf8Encode(char, buf[n..n+5]) catch unreachable;
+                            n += std.unicode.utf8Encode(unit, buf[n..n+5]) catch unreachable;
                     },
                     else => p.die("invalid escape sequence"),
                 },
