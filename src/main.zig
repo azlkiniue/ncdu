@@ -461,7 +461,6 @@ fn readImport(path: [:0]const u8) !void {
         else try std.fs.cwd().openFileZ(path, .{});
     errdefer fd.close();
 
-    // TODO: While we're at it, recognize and handle compressed JSON
     var buf: [8]u8 = undefined;
     try fd.reader().readNoEof(&buf);
     if (std.mem.eql(u8, &buf, bin_export.SIGNATURE)) {

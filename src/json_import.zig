@@ -13,9 +13,9 @@ const c = @import("c.zig").c;
 const ZstdReader = struct {
     ctx: ?*c.ZSTD_DStream,
     in: c.ZSTD_inBuffer,
-    // Assumption: ZSTD_decompressStream() can always make progress as long as
-    // 1/8 of this buffer is filled.
-    inbuf: [c.ZSTD_BLOCKSIZE_MAX + 16]u8, // This ZSTD_DStreamInSize() + a little bit extra
+    // Assumption: ZSTD_decompressStream() can always output uncompressed data
+    // as long as half of this buffer is filled.
+    inbuf: [c.ZSTD_BLOCKSIZE_MAX * 2 + 1024]u8, // This twice ZSTD_DStreamInSize() + a little bit extra
 
     fn create(head: []const u8) *ZstdReader {
         const r = main.allocator.create(ZstdReader) catch unreachable;
@@ -39,11 +39,15 @@ const ZstdReader = struct {
     }
 
     fn read(r: *ZstdReader, f: std.fs.File, out: []u8) !usize {
-        if (r.in.size - r.in.pos < r.inbuf.len / 8) {
-            std.mem.copyForwards(u8, &r.inbuf, r.inbuf[r.in.pos..][0..r.in.size - r.in.pos]);
-            r.in.size -= r.in.pos;
-            r.in.pos = 0;
-            r.in.size += try f.read(r.inbuf[r.in.size..]);
+        while (r.in.size - r.in.pos < r.inbuf.len / 2) {
+            if (r.in.pos > 0) {
+                std.mem.copyForwards(u8, &r.inbuf, r.inbuf[r.in.pos..][0..r.in.size - r.in.pos]);
+                r.in.size -= r.in.pos;
+                r.in.pos = 0;
+            }
+            const rd = try f.read(r.inbuf[r.in.size..]);
+            r.in.size += rd;
+            if (rd == 0) break;
         }
         var arg = c.ZSTD_outBuffer{
             .dst = out.ptr,
