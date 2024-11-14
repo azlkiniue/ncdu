@@ -13,9 +13,8 @@ const c = @import("c.zig").c;
 const ZstdReader = struct {
     ctx: ?*c.ZSTD_DStream,
     in: c.ZSTD_inBuffer,
-    // Assumption: ZSTD_decompressStream() can always output uncompressed data
-    // as long as half of this buffer is filled.
-    inbuf: [c.ZSTD_BLOCKSIZE_MAX * 2 + 1024]u8, // This twice ZSTD_DStreamInSize() + a little bit extra
+    lastret: usize = 0,
+    inbuf: [c.ZSTD_BLOCKSIZE_MAX + 16]u8, // This ZSTD_DStreamInSize() + a little bit extra
 
     fn create(head: []const u8) *ZstdReader {
         const r = main.allocator.create(ZstdReader) catch unreachable;
@@ -39,26 +38,21 @@ const ZstdReader = struct {
     }
 
     fn read(r: *ZstdReader, f: std.fs.File, out: []u8) !usize {
-        while (r.in.size - r.in.pos < r.inbuf.len / 2) {
-            if (r.in.pos > 0) {
-                std.mem.copyForwards(u8, &r.inbuf, r.inbuf[r.in.pos..][0..r.in.size - r.in.pos]);
-                r.in.size -= r.in.pos;
+        while (true) {
+            if (r.in.size == r.in.pos) {
                 r.in.pos = 0;
+                r.in.size = try f.read(&r.inbuf);
+                if (r.in.size == 0) {
+                    if (r.lastret == 0) return 0;
+                    return error.ZstdDecompressError; // Early EOF
+                }
             }
-            const rd = try f.read(r.inbuf[r.in.size..]);
-            r.in.size += rd;
-            if (rd == 0) break;
+
+            var arg = c.ZSTD_outBuffer{ .dst = out.ptr, .size = out.len, .pos = 0 };
+            r.lastret = c.ZSTD_decompressStream(r.ctx, &arg, &r.in);
+            if (c.ZSTD_isError(r.lastret) != 0) return error.ZstdDecompressError;
+            if (arg.pos > 0) return arg.pos;
         }
-        var arg = c.ZSTD_outBuffer{
-            .dst = out.ptr,
-            .size = out.len,
-            .pos = 0,
-        };
-        const v = c.ZSTD_decompressStream(r.ctx, &arg, &r.in);
-        if (c.ZSTD_isError(v) != 0) return error.ZstdDecompressError;
-        // No output implies that the input buffer has been fully consumed.
-        if (arg.pos == 0 and r.in.pos != r.in.size) return error.ZstdDecompressError;
-        return arg.pos;
     }
 };
 
@@ -75,7 +69,7 @@ const Parser = struct {
     rdsize: usize = 0,
     byte: u64 = 1,
     line: u64 = 1,
-    buf: [16*1024]u8 = undefined,
+    buf: [129*1024]u8 = undefined,
 
     fn die(p: *Parser, str: []const u8) noreturn {
         ui.die("Error importing file on line {}:{}: {s}.\n", .{ p.line, p.byte, str });
