@@ -68,15 +68,21 @@ static void browse_draw_info(struct dir *dr) {
 
     ncaddstr(2,  9, cropstr(dr->name, 49));
     ncaddstr(3,  9, cropstr(getpath(dr->parent), 49));
-    ncaddstr(4,  9, dr->flags & FF_DIR ? "Directory" : dr->flags & FF_FILE ? "File" : "Other");
 
-    if(e) {
+    if(!e)
+      ncaddstr(4,  9, dr->flags & FF_DIR ? "Directory" : dr->flags & FF_FILE ? "File" : "Other");
+    else {
       time_t t = (time_t)e->mtime;
-      ncaddstr(4, 9, fmtmode(e->mode));
-      ncprint(4, 26, "%d", e->uid);
-      ncprint(4, 38, "%d", e->gid);
-      strftime(mbuf, sizeof(mbuf), "%Y-%m-%d %H:%M:%S %z", localtime(&t));
-      ncaddstr(5, 18, mbuf);
+      if(e->flags & FFE_MODE) ncaddstr(4, 9, fmtmode(e->mode));
+      else ncaddstr(4, 9, "N/A");
+      if(e->flags & FFE_UID) ncprint(4, 26, "%d", e->uid);
+      else ncaddstr(4, 26, "N/A");
+      if(e->flags & FFE_GID) ncprint(4, 38, "%d", e->gid);
+      else ncaddstr(4, 38, "N/A");
+      if(e->flags & FFE_MTIME) {
+        strftime(mbuf, sizeof(mbuf), "%Y-%m-%d %H:%M:%S %z", localtime(&t));
+        ncaddstr(5, 18, mbuf);
+      } else ncaddstr(5, 18, "N/A");
     }
 
     ncmove(6, 18);

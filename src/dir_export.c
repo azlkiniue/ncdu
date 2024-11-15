@@ -98,14 +98,22 @@ static void output_info(struct dir *d, const char *name, struct dir_ext *e, unsi
   }
 
   if(e) {
-    fputs(",\"uid\":", stream);
-    output_int(e->uid);
-    fputs(",\"gid\":", stream);
-    output_int(e->gid);
-    fputs(",\"mode\":", stream);
-    output_int(e->mode);
-    fputs(",\"mtime\":", stream);
-    output_int(e->mtime);
+    if(e->flags & FFE_UID) {
+      fputs(",\"uid\":", stream);
+      output_int(e->uid);
+    }
+    if(e->flags & FFE_GID) {
+      fputs(",\"gid\":", stream);
+      output_int(e->gid);
+    }
+    if(e->flags & FFE_MODE) {
+      fputs(",\"mode\":", stream);
+      output_int(e->mode);
+    }
+    if(e->flags & FFE_MTIME) {
+      fputs(",\"mtime\":", stream);
+      output_int(e->mtime);
+    }
   }
 
   if(d->flags & FF_HLNKC) {

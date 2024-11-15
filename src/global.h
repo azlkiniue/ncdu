@@ -54,6 +54,12 @@
 #define FF_KERNFS 0x200 /* excluded because it was a Linux pseudo filesystem */
 #define FF_FRMLNK 0x400 /* excluded because it was a firmlink */
 
+/* Ext mode flags (struct dir_ext -> flags) */
+#define FFE_MTIME 0x01
+#define FFE_UID   0x02
+#define FFE_GID   0x04
+#define FFE_MODE  0x08
+
 /* Program states */
 #define ST_CALC   0
 #define ST_BROWSE 1
@@ -90,6 +96,7 @@ struct dir_ext {
   uint64_t mtime;
   int uid, gid;
   unsigned short mode;
+  unsigned char flags;
 };
 
 
