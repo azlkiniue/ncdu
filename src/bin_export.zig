@@ -72,7 +72,8 @@ inline fn cborByte(major: CborMajor, arg: u5) u8 { return (@as(u8, @intFromEnum(
 fn blockSize(num: u32) usize {
     //                        block size    uncompressed data in this num range
     //                 # mil      # KiB         # GiB
-    return if (num < ( 1<<20))   64<<10  //    64
+    return main.config.export_block_size
+    orelse if (num < ( 1<<20))   64<<10  //    64
       else if (num < ( 2<<20))  128<<10  //   128
       else if (num < ( 4<<20))  256<<10  //   512
       else if (num < ( 8<<20))  512<<10  //  2048

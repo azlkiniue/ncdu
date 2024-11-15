@@ -82,6 +82,7 @@ pub const config = struct {
     pub var threads: usize = 1;
     pub var complevel: u8 = 4;
     pub var compress: bool = false;
+    pub var export_block_size: ?usize = null;
 
     pub var update_delay: u64 = 100*std.time.ns_per_ms;
     pub var scan_ui: ?enum { none, line, full } = null;
@@ -283,6 +284,11 @@ fn argConfig(args: *Args, opt: Args.Option) bool {
         const val = args.arg();
         config.complevel = std.fmt.parseInt(u8, val, 10) catch ui.die("Invalid number for --compress-level: {s}.\n", .{val});
         if (config.complevel <= 0 or config.complevel > 20) ui.die("Invalid number for --compress-level: {s}.\n", .{val});
+    } else if (opt.is("--export-block-size")) {
+        const val = args.arg();
+        const num = std.fmt.parseInt(u14, val, 10) catch ui.die("Invalid number for --export-block-size: {s}.\n", .{val});
+        if (num < 4 or num > 16000) ui.die("Invalid number for --export-block-size: {s}.\n", .{val});
+        config.export_block_size = @as(usize, num) * 1024;
     } else if (opt.is("--confirm-quit")) config.confirm_quit = true
     else if (opt.is("--no-confirm-quit")) config.confirm_quit = false
     else if (opt.is("--confirm-delete")) config.confirm_delete = true

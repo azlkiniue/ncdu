@@ -23,6 +23,7 @@
 .Op Fl t , \-threads Ar num
 .Op Fl c , \-compress , \-no\-compress
 .Op Fl \-compress\-level Ar num
+.Op Fl \-export\-block\-size Ar num
 .Op Fl 0 , 1 , 2
 .Op Fl q , \-slow\-ui\-updates , \-fast\-ui\-updates
 .Op Fl \-enable\-shell , \-disable\-shell
@@ -193,9 +194,18 @@ The binary format (see
 .Fl O )
 does not have this problem and supports efficient exporting with any number of
 threads.
+.El
+.
+.Ss Export Options
+These options affect behavior when exporting to file with the
+.Fl o
+or
+.Fl O
+options.
+.Bl -tag -width Ds
 .It Fl c , \-compress , \-no\-compress
 Enable or disable Zstandard compression when exporting to JSON (see
-.Fl o )
+.Fl o ) .
 .It Fl \-compress\-level Ar num
 Set the Zstandard compression level when using
 .Fl O
@@ -203,6 +213,17 @@ or
 .Fl c .
 Valid values are 1 (fastest) to 19 (slowest).
 Defaults to 4.
+.It Fl \-export\-block\-size Ar num
+Set the block size, in kibibytes, for the binary export format (see
+.Fl O ) .
+Larger blocks require more memory but result in better compression efficiency.
+This option can be combined with a higher
+.Fl \-compress\-level
+for even better compression.
+.Pp
+Accepted values are between 4 and 16000.
+The defaults is to start at 64 KiB and then gradually increase the block size
+for large exports.
 .El
 .
 .Ss Interface Options
@@ -497,29 +518,28 @@ Empty directory.
 .Sh EXAMPLES
 To scan and browse the directory you're currently in, all you need is a simple:
 .Dl ncdu
-If you want to scan a full filesystem, for example your root filesystem, then
-you'll want to use
+To scan a full filesystem, for example your root filesystem, you'll want to use
 .Fl x :
 .Dl ncdu \-x /
 .Pp
 Since scanning a large directory may take a while, you can scan a directory and
 export the results for later viewing:
 .Bd -literal -offset indent
-ncdu \-1cxo export.json.zst /
+ncdu \-1xO export.ncdu /
 # ...some time later:
-ncdu \-f export.json.zst
+ncdu \-f export.ncdu
 .Ed
 To export from a cron job, make sure to replace
 .Fl 1
 with
 .Fl 0
-to suppress any unnecessary output.
+to suppress unnecessary progress output.
 .Pp
 You can also export a directory and browse it once scanning is done:
 .Dl ncdu \-co\- | tee export.json.zst | ./ncdu \-f\-
 .Pp
 To scan a system remotely, but browse through the files locally:
-.Dl ssh user@system ncdu \-co\- / | ./ncdu \-cf\-
+.Dl ssh user@system ncdu \-co\- / | ./ncdu \-f\-
 Remote scanning and local viewing has two major advantages when
 compared to running
 .Nm
