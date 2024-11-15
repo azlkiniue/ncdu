@@ -191,7 +191,7 @@ static char *argparser_arg(struct argparser *p) {
 #define OPT(_s) (strcmp(argparser_state.last, (_s)) == 0)
 #define ARG (argparser_arg(&argparser_state))
 
-static int arg_option(void) {
+static int arg_option(int infile) {
   char *arg, *tmp;
   if(OPT("-q") || OPT("--slow-ui-updates")) update_delay = 2000;
   else if(OPT("--fast-ui-updates")) update_delay = 100;
@@ -253,10 +253,14 @@ static int arg_option(void) {
   else if(OPT("--no-si")) si = 0;
   else if(OPT("-L") || OPT("--follow-symlinks")) follow_symlinks = 1;
   else if(OPT("--no-follow-symlinks")) follow_symlinks = 0;
-  else if(OPT("--exclude")) exclude_add(ARG);
-  else if(OPT("-X") || OPT("--exclude-from")) {
-    arg = ARG;
+  else if(OPT("--exclude")) {
+    arg = infile ? expanduser(ARG) : ARG;
+    exclude_add(arg);
+    if(infile) free(arg);
+  } else if(OPT("-X") || OPT("--exclude-from")) {
+    arg = infile ? expanduser(ARG) : ARG;
     if(exclude_addfile(arg)) die("Can't open %s: %s\n", arg, strerror(errno));
+    if(infile) free(arg);
   } else if(OPT("--exclude-caches")) cachedir_tags = 1;
   else if(OPT("--include-caches")) cachedir_tags = 0;
   else if(OPT("--exclude-kernfs")) exclude_kernfs = 1;
@@ -347,7 +351,7 @@ static void config_read(const char *fn) {
   argparser_state.argc = argslen;
 
   while((r = argparser_next(&argparser_state)) > 0)
-    if(r == 2 || !arg_option())
+    if(r == 2 || !arg_option(1))
       die("Unknown option in config file '%s': %s.\nRun with --ignore-config to skip reading config files.\n", fn, argparser_state.last);
 
   for(argsi=args; argsi && *argsi; argsi++) free(*argsi);
@@ -394,7 +398,7 @@ static void argv_parse(int argc, char **argv) {
     else if(OPT("-o")) export = ARG;
     else if(OPT("-f")) import = ARG;
     else if(OPT("--ignore-config")) {}
-    else if(!arg_option()) die("Unknown option '%s'.\n", argparser_state.last);
+    else if(!arg_option(0)) die("Unknown option '%s'.\n", argparser_state.last);
   }
 
 #if !(HAVE_LINUX_MAGIC_H && HAVE_SYS_STATFS_H && HAVE_STATFS)

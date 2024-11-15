@@ -190,5 +190,7 @@ void *xrealloc(void *, size_t);
 
 char *xstrdup(const char *);
 
+char *expanduser(const char *);
+
 #endif
 

@@ -30,6 +30,8 @@
 #include <ncurses.h>
 #include <stdarg.h>
 #include <unistd.h>
+#include <pwd.h>
+
 #ifdef HAVE_LOCALE_H
 #include <locale.h>
 #endif
@@ -441,7 +443,7 @@ void addparentstats(struct dir *d, int64_t size, int64_t asize, uint64_t mtime, 
   char buf[128];\
   while((ptr = f) == NULL) {\
     close_nc();\
-    write(2, oom_msg, sizeof(oom_msg));\
+    write(2, oom_msg, sizeof(oom_msg)-1);\
     read(0, buf, sizeof(buf));\
   }\
   return ptr;
@@ -454,4 +456,42 @@ char *xstrdup(const char *str) {
   char *r = xmalloc(strlen(str)+1);
   strcpy(r, str);
   return r;
+}
+
+
+/* Expands '~' and '~user' */
+char *expanduser(const char *path) {
+  size_t len, size;
+  struct passwd *pwd;
+  char *home = NULL, *tmp;
+
+  if(path[0] != '~') return xstrdup(path);
+  len = strcspn(path+1, "/");
+
+  if(len == 0) {
+    home = getenv("HOME");
+    if(!home) {
+      pwd = getpwuid(getuid());
+      if(pwd) home = pwd->pw_dir;
+    }
+  } else {
+    tmp = xmalloc(len+1);
+    memcpy(tmp, path+1, len);
+    tmp[len] = 0;
+    pwd = getpwnam(tmp);
+    free(tmp);
+    if(pwd) home = pwd->pw_dir;
+  }
+  if(!home) return xstrdup(path);
+
+  size = strlen(home);
+  while(size > 0 && home[size-1] == '/') size--;
+  home[size] = 0;
+
+  if(size == 0 && path[len+1] == 0) return xstrdup("/");
+
+  size += strlen(path) - len;
+  tmp = xmalloc(size);
+  snprintf(tmp, size, "%s%s", home, path+1+len);
+  return tmp;
 }
