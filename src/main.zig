@@ -194,7 +194,7 @@ const Args = struct {
     }
 };
 
-fn argConfig(args: *Args, opt: Args.Option) bool {
+fn argConfig(args: *Args, opt: Args.Option, infile: bool) bool {
     if (opt.is("-q") or opt.is("--slow-ui-updates")) config.update_delay = 2*std.time.ns_per_s
     else if (opt.is("--fast-ui-updates")) config.update_delay = 100*std.time.ns_per_ms
     else if (opt.is("-x") or opt.is("--one-file-system")) config.same_fs = true
@@ -270,9 +270,13 @@ fn argConfig(args: *Args, opt: Args.Option) bool {
     else if (opt.is("--no-si")) config.si = false
     else if (opt.is("-L") or opt.is("--follow-symlinks")) config.follow_symlinks = true
     else if (opt.is("--no-follow-symlinks")) config.follow_symlinks = false
-    else if (opt.is("--exclude")) exclude.addPattern(args.arg())
-    else if (opt.is("-X") or opt.is("--exclude-from")) {
-        const arg = args.arg();
+    else if (opt.is("--exclude")) {
+        const arg = if (infile) (util.expanduser(args.arg(), allocator) catch unreachable) else args.arg();
+        defer if (infile) allocator.free(arg);
+        exclude.addPattern(arg);
+    } else if (opt.is("-X") or opt.is("--exclude-from")) {
+        const arg = if (infile) (util.expanduser(args.arg(), allocator) catch unreachable) else args.arg();
+        defer if (infile) allocator.free(arg);
         readExcludeFile(arg) catch |e| ui.die("Error reading excludes from {s}: {s}.\n", .{ arg, ui.errorString(e) });
     } else if (opt.is("--exclude-caches")) config.exclude_caches = true
     else if (opt.is("--include-caches")) config.exclude_caches = false
@@ -341,7 +345,7 @@ fn tryReadArgsFile(path: [:0]const u8) void {
 
     var args = Args.init(arglist.items);
     while (args.next()) |opt| {
-        if (!argConfig(&args, opt))
+        if (!argConfig(&args, opt, true))
             ui.die("Unrecognized option in config file '{s}': {s}.\nRun with --ignore-config to skip reading config files.\n", .{path, opt.val});
     }
     for (arglist.items) |i| allocator.free(i);
@@ -540,7 +544,7 @@ pub fn main() void {
             else if (opt.is("-f")) import_file = allocator.dupeZ(u8, args.arg()) catch unreachable
             else if (opt.is("--ignore-config")) {}
             else if (opt.is("--quit-after-scan")) quit_after_scan = true // undocumented feature to help with benchmarking scan/import
-            else if (argConfig(&args, opt)) {}
+            else if (argConfig(&args, opt, false)) {}
             else ui.die("Unrecognized option '{s}'.\n", .{opt.val});
         }
     }

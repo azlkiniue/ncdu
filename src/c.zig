@@ -9,6 +9,9 @@ pub const c = @cImport({
     @cInclude("wchar.h"); // wcwidth()
     @cInclude("locale.h"); // setlocale() and localeconv()
     @cInclude("fnmatch.h"); // fnmatch()
+    @cInclude("unistd.h"); // getuid()
+    @cInclude("sys/types.h"); // struct passwd
+    @cInclude("pwd.h"); // getpwnam(), getpwuid()
     if (@import("builtin").os.tag == .linux) {
         @cInclude("sys/vfs.h"); // statfs()
     }
