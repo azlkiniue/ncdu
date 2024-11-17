@@ -106,7 +106,7 @@ pub const Thread = struct {
         var out = std.ArrayList(u8).init(main.allocator);
         if (t.block_num == std.math.maxInt(u32) or t.off == 0) return out;
 
-        out.ensureTotalCapacityPrecise(12 + c.ZSTD_COMPRESSBOUND(t.off)) catch unreachable;
+        out.ensureTotalCapacityPrecise(12 + @as(usize, @intCast(c.ZSTD_COMPRESSBOUND(@as(c_int, @intCast(t.off)))))) catch unreachable;
         out.items.len = out.capacity;
         const bodylen = compressZstd(t.buf[0..t.off], out.items[8..]);
         out.items.len = 12 + bodylen;
