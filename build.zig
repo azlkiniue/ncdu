@@ -8,12 +8,14 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const pie = b.option(bool, "pie", "Build with PIE support (by default false)") orelse false;
+    const strip = b.option(bool, "strip", "Strip debugging info (by default false)") orelse false;
 
     const exe = b.addExecutable(.{
         .name = "ncdu",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .strip = strip,
         .link_libc = true,
     });
 
