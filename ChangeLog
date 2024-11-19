@@ -1,3 +1,10 @@
+1.21 - 2024-11-19
+	- Perform tilde expansion on paths in the config file (from 2.7)
+	- Fix JSON import of escaped UTF-16 surrogate pairs (from 2.7)
+	- Fix displaying and exporting zero values when extended info is not
+	  available (from 2.6)
+	- Fix JSON export and import of the “other filesystem” flag (from 2.5)
+
 1.20 - 2024-04-21
 	- Revert default color scheme back to 'off'
 	- Rewrite man page in mdoc, drop pod2man dependency
