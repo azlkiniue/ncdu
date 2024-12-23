@@ -76,7 +76,7 @@ float formatsize(int64_t from, const char **unit) {
   float r = from;
   if (si) {
     if(r < 1000.0f)   { *unit = " B"; }
-    else if(r < 1e6f) { *unit = "KB"; r/=1e3f; }
+    else if(r < 1e6f) { *unit = "kB"; r/=1e3f; }
     else if(r < 1e9f) { *unit = "MB"; r/=1e6f; }
     else if(r < 1e12f){ *unit = "GB"; r/=1e9f; }
     else if(r < 1e15f){ *unit = "TB"; r/=1e12f; }
