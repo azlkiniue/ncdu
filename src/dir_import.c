@@ -469,12 +469,12 @@ static int iteminfo(void) {
       C(rint64(&iv, UINT64_MAX));
       ctx->buf_dir->ino = iv;
     } else if(strcmp(ctx->val, "uid") == 0) {        /* uid */
-      C(rint64(&iv, INT32_MAX));
+      C(rint64(&iv, UINT32_MAX));
       ctx->buf_dir->flags |= FF_EXT;
       ctx->buf_ext->flags |= FFE_UID;
       ctx->buf_ext->uid = iv;
     } else if(strcmp(ctx->val, "gid") == 0) {        /* gid */
-      C(rint64(&iv, INT32_MAX));
+      C(rint64(&iv, UINT32_MAX));
       ctx->buf_dir->flags |= FF_EXT;
       ctx->buf_ext->flags |= FFE_GID;
       ctx->buf_ext->gid = iv;

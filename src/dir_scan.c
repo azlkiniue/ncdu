@@ -137,8 +137,8 @@ static void stat_to_dir(struct stat *fs) {
 
   buf_ext->mode  = fs->st_mode;
   buf_ext->mtime = fs->st_mtime;
-  buf_ext->uid   = (int)fs->st_uid;
-  buf_ext->gid   = (int)fs->st_gid;
+  buf_ext->uid   = (unsigned int)fs->st_uid;
+  buf_ext->gid   = (unsigned int)fs->st_gid;
   buf_ext->flags = FFE_MTIME | FFE_UID | FFE_GID | FFE_MODE;
 }
 

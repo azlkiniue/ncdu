@@ -94,7 +94,7 @@ struct dir {
  * macros to help manage this. */
 struct dir_ext {
   uint64_t mtime;
-  int uid, gid;
+  unsigned int uid, gid;
   unsigned short mode;
   unsigned char flags;
 };

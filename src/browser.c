@@ -75,9 +75,9 @@ static void browse_draw_info(struct dir *dr) {
       time_t t = (time_t)e->mtime;
       if(e->flags & FFE_MODE) ncaddstr(4, 9, fmtmode(e->mode));
       else ncaddstr(4, 9, "N/A");
-      if(e->flags & FFE_UID) ncprint(4, 26, "%d", e->uid);
+      if(e->flags & FFE_UID) ncprint(4, 26, "%u", e->uid);
       else ncaddstr(4, 26, "N/A");
-      if(e->flags & FFE_GID) ncprint(4, 38, "%d", e->gid);
+      if(e->flags & FFE_GID) ncprint(4, 38, "%u", e->gid);
       else ncaddstr(4, 38, "N/A");
       if(e->flags & FFE_MTIME) {
         strftime(mbuf, sizeof(mbuf), "%Y-%m-%d %H:%M:%S %z", localtime(&t));
