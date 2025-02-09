@@ -288,7 +288,7 @@ pub const Style = lbl: {
         };
     }
     break :lbl @Type(.{
-        .Enum = .{
+        .@"enum" = .{
             .tag_type = u8,
             .fields = &fields,
             .decls = &[_]std.builtin.Type.Declaration{},

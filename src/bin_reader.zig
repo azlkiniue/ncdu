@@ -338,7 +338,7 @@ const ItemParser = struct {
     // Skips over any fields that don't fit into an ItemKey.
     fn next(r: *ItemParser) ?Field {
         while (r.key()) |k| {
-            if (k.major == .pos and k.arg <= std.math.maxInt(@typeInfo(ItemKey).Enum.tag_type)) return .{
+            if (k.major == .pos and k.arg <= std.math.maxInt(@typeInfo(ItemKey).@"enum".tag_type)) return .{
                 .key = @enumFromInt(k.arg),
                 .val = r.r.next(),
             } else {
