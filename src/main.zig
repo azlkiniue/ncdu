@@ -637,7 +637,7 @@ pub fn main() void {
         if (config.binreader and (export_json != null or export_bin != null))
             bin_reader.import();
     } else {
-        var buf = [_]u8{0} ** (std.fs.MAX_PATH_BYTES+1);
+        var buf: [std.fs.max_path_bytes+1]u8 = @splat(0);
         const path =
             if (std.posix.realpathZ(scan_dir orelse ".", buf[0..buf.len-1])) |p| buf[0..p.len:0]
             else |_| (scan_dir orelse ".");
