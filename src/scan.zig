@@ -67,7 +67,7 @@ fn statAt(parent: std.fs.Dir, name: [:0]const u8, follow: bool, symlink: *bool) 
                 .hasgid = true,
                 .hasmode = true,
             },
-            .mtime = clamp(model.Ext, .mtime, stat.mtime().tv_sec),
+            .mtime = clamp(model.Ext, .mtime, stat.mtime().sec),
             .uid = truncate(model.Ext, .uid, stat.uid),
             .gid = truncate(model.Ext, .gid, stat.gid),
             .mode = truncate(model.Ext, .mode, stat.mode),
