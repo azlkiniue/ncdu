@@ -41,7 +41,7 @@ test "imports" {
 // This allocator never returns an error, it either succeeds or causes ncdu to quit.
 // (Which means you'll find a lot of "catch unreachable" sprinkled through the code,
 // they look scarier than they are)
-fn wrapAlloc(_: *anyopaque, len: usize, ptr_alignment: u8, return_address: usize) ?[*]u8 {
+fn wrapAlloc(_: *anyopaque, len: usize, ptr_alignment: std.mem.Alignment, return_address: usize) ?[*]u8 {
     while (true) {
         if (std.heap.c_allocator.vtable.alloc(undefined, len, ptr_alignment, return_address)) |r|
             return r
@@ -56,6 +56,7 @@ pub const allocator = std.mem.Allocator{
         .alloc = wrapAlloc,
         // AFAIK, all uses of resize() to grow an allocation will fall back to alloc() on failure.
         .resize = std.heap.c_allocator.vtable.resize,
+        .remap = std.heap.c_allocator.vtable.remap,
         .free = std.heap.c_allocator.vtable.free,
     },
 };
