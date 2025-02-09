@@ -63,7 +63,7 @@ pub const allocator = std.mem.Allocator{
 
 // Custom panic impl to reset the terminal before spewing out an error message.
 pub fn panic(msg: []const u8, error_return_trace: ?*std.builtin.StackTrace, ret_addr: ?usize) noreturn {
-    @setCold(true);
+    @branchHint(.cold);
     ui.deinit();
     std.debug.panicImpl(error_return_trace, ret_addr orelse @returnAddress(), msg);
 }

@@ -83,7 +83,7 @@ const Parser = struct {
     }
 
     fn fill(p: *Parser) void {
-        @setCold(true);
+        @branchHint(.cold);
         p.rdoff = 0;
         p.rdsize = (if (p.zstd) |z| z.read(p.rd, &p.buf) else p.rd.read(&p.buf)) catch |e| switch (e) {
             error.IsDir => p.die("not a file"), // should be detected at open() time, but no flag for that...
@@ -133,7 +133,7 @@ const Parser = struct {
     }
 
     fn stringContentSlow(p: *Parser, buf: []u8, head: u8, off: usize) []u8 {
-        @setCold(true);
+        @branchHint(.cold);
         var b = head;
         var n = off;
         while (true) {

@@ -37,7 +37,7 @@ pub fn quit() noreturn {
 // no clue if ncurses will consistently report OOM, but we're not handling that
 // right now.
 pub fn oom() void {
-    @setCold(true);
+    @branchHint(.cold);
     if (main_thread == std.Thread.getCurrentId()) {
         const haveui = inited;
         deinit();

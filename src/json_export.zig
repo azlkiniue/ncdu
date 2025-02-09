@@ -73,7 +73,7 @@ pub const Writer = struct {
     dir_entry_open: bool = false,
 
     fn flush(ctx: *Writer, bytes: usize) void {
-        @setCold(true);
+        @branchHint(.cold);
         // This can only really happen when the root path exceeds PATH_MAX,
         // in which case we would probably have error'ed out earlier anyway.
         if (bytes > ctx.buf.len) ui.die("Error writing JSON export: path too long.\n", .{});

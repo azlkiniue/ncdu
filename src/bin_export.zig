@@ -118,7 +118,7 @@ pub const Thread = struct {
     }
 
     fn flush(t: *Thread, expected_len: usize) void {
-        @setCold(true);
+        @branchHint(.cold);
         const block = createBlock(t);
         defer block.deinit();
 
