@@ -276,7 +276,7 @@ const Thread = struct {
                 if (entry) |e| t.scanOne(d, e.name)
                 else {
                     t.sink.setDir(null);
-                    t.stack.pop().destroy(t);
+                    t.stack.pop().?.destroy(t);
                 }
             }
         }
