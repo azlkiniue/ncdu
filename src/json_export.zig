@@ -126,14 +126,14 @@ pub const Writer = struct {
         var index: usize = buf.len;
         while (a >= 100) : (a = @divTrunc(a, 100)) {
             index -= 2;
-            buf[index..][0..2].* = std.fmt.digits2(@as(usize, @intCast(a % 100)));
+            buf[index..][0..2].* = std.fmt.digits2(@as(u8, @intCast(a % 100)));
         }
         if (a < 10) {
             index -= 1;
             buf[index] = '0' + @as(u8, @intCast(a));
         } else {
             index -= 2;
-            buf[index..][0..2].* = std.fmt.digits2(@as(usize, @intCast(a)));
+            buf[index..][0..2].* = std.fmt.digits2(@as(u8, @intCast(a)));
         }
         ctx.write(buf[index..]);
     }
