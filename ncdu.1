@@ -6,6 +6,7 @@
 .Sh NAME
 .Nm ncdu
 .Nd NCurses Disk Usage
+.
 .Sh SYNOPSIS
 .Nm
 .Op Fl f Ar file
@@ -32,6 +33,7 @@
 .Op Fl \-show\-mtime , \-hide\-mtime
 .Op Fl \-show\-graph , \-hide\-graph
 .Op Fl \-show\-percent , \-hide\-percent
+.Op Fl \-graph\-style Ar hash | half\-block | eighth\-block
 .Op Fl \-sort Ar column
 .Op Fl \-enable\-natsort , \-disable\-natsort
 .Op Fl \-group\-directories\-first , \-no\-group\-directories\-first
@@ -43,11 +45,13 @@
 .Op Fl h , \-help
 .Nm
 .Op Fl v , V , \-version
+.
 .Sh DESCRIPTION
 .Nm
 (NCurses Disk Usage) is an interactive curses-based version of the well-known
 .Xr du 1 ,
 and provides a fast way to see what directories are using your disk space.
+.
 .Sh OPTIONS
 .Ss Mode Selection
 .Bl -tag -width Ds
@@ -104,6 +108,7 @@ using 'm' and 'M', respectively.
 .It Fl \-ignore\-config
 Do not attempt to load any configuration files.
 .El
+.
 .Ss Scan Options
 These options affect the scanning progress, they have no effect when importing
 directory information from a file.
@@ -160,9 +165,8 @@ When exporting the data with
 ncurses will not be initialized at all.
 This option is the default when exporting to standard output.
 .It Fl 1
-Similar to
-.Fl 0 ,
-but does give feedback on the scanning progress with a single line of output.
+Write progress information to the terminal, but don't open a full-screen
+ncurses interface.
 This option is the default when exporting to a file.
 .Pp
 In some cases, the ncurses browser interface which you'll see after the
@@ -233,6 +237,17 @@ Can also be toggled in the file browser with the 'g' key.
 .It Fl \-show\-percent , \-hide\-percent
 Show (default) or hide the relative size percent column.
 Can also be toggled in the file browser with the 'g' key.
+.It Fl \-graph\-style Ar hash | half\-block | eighth\-block
+Change the way that the relative size bar column is drawn.
+Recognized values are
+.Ar hash
+to draw ASCII '#' characters (default and most portable),
+.Ar half\-block
+to use half-block drawing characters or
+.Ar eighth\-block
+to use eighth-block drawing characters.
+Eighth-block characters are the most precise but may not render correctly in
+all terminals.
 .It Fl \-sort Ar column
 Change the default column to sort on.
 Accepted values are
@@ -278,6 +293,7 @@ color scheme that also works in terminals with a light background.
 The default is
 .Ar off .
 .El
+.
 .Sh CONFIGURATION
 .Nm
 can be configured by placing command-line options in
@@ -306,6 +322,7 @@ Example configuration file:
 # Exclude .git directories
 \-\-exclude .git
 .Ed
+.
 .Sh KEYS
 .Bl -tag -width Ds
 .It ?
@@ -387,6 +404,7 @@ itself does not (currently) warn about or prevent this situation.
 .It q
 Quit
 .El
+.
 .Sh FILE FLAGS
 Entries in the browser interface may be prefixed by a one\-character flag.
 These flags have the following meaning:
@@ -410,11 +428,11 @@ Same file was already counted (hard link).
 .It e
 Empty directory.
 .El
+.
 .Sh EXAMPLES
 To scan and browse the directory you're currently in, all you need is a simple:
 .Dl ncdu
-If you want to scan a full filesystem, for example your root filesystem, then
-you'll want to use
+To scan a full filesystem, for example your root filesystem, you'll want to use
 .Fl x :
 .Dl ncdu \-x /
 .Pp
@@ -429,7 +447,7 @@ To export from a cron job, make sure to replace
 .Fl 1
 with
 .Fl 0
-to suppress any unnecessary output.
+to suppress unnecessary progress output.
 .Pp
 You can also export a directory and browse it once scanning is done:
 .Dl ncdu \-o\- | tee export.file | ./ncdu \-f\-
@@ -449,6 +467,7 @@ the local system without any network latency, and
 .Nm
 does not keep the entire directory structure in memory when exporting, so this
 won't consume much memory on the remote system.
+.
 .Sh SEE ALSO
 .Xr du 1 ,
 .Xr tree 1 .
@@ -456,9 +475,11 @@ won't consume much memory on the remote system.
 .Nm
 has a website:
 .Lk https://dev.yorhel.nl/ncdu
+.
 .Sh AUTHORS
 Written by
 .An Yorhel Aq Mt projects@yorhel.nl
+.
 .Sh BUGS
 Directory hard links are not supported.
 They are not detected as being hard links, and will thus get scanned and

@@ -47,6 +47,7 @@ int confirm_quit = 0;
 int si = 0;
 int show_as = 0;
 int graph = 1;
+int graph_style = 0;
 int show_items = 0;
 int show_mtime = 0;
 
@@ -221,7 +222,13 @@ static int arg_option(int infile) {
   else if(OPT("--no-group-directories-first")) dirlist_sort_df = 0;
   else if(OPT("--enable-natsort")) dirlist_natsort = 1;
   else if(OPT("--disable-natsort")) dirlist_natsort = 0;
-  else if(OPT("--sort")) {
+  else if(OPT("--graph-style")) {
+    arg = ARG;
+    if (strcmp(arg, "hash") == 0) graph_style = 0;
+    else if (strcmp(arg, "half-block") == 0) graph_style = 1;
+    else if (strcmp(arg, "eighth-block") == 0 || strcmp(arg, "eigth-block") == 0) graph_style = 2;
+    else die("Unknown --graph-style option: %s.\n", arg);
+  } else if(OPT("--sort")) {
     arg = ARG;
     tmp = strrchr(arg, '-');
     if(tmp && (strcmp(tmp, "-asc") == 0 || strcmp(tmp, "-desc") == 0)) *tmp = 0;

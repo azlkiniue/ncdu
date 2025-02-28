@@ -124,6 +124,7 @@ extern int si;
 extern int show_as;
 /* graph display setting */
 extern int graph;
+extern int graph_style;
 /* column visibility */
 extern int show_items;
 extern int show_mtime;
