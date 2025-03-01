@@ -311,6 +311,7 @@ is given on the command line.
 .Pp
 The configuration file format is simply one command line option per line.
 Lines starting with '#' are ignored.
+A line can be prefixed with '@' to suppress errors while parsing the option.
 Example configuration file:
 .Bd -literal -offset indent
 # Always enable extended mode
@@ -321,6 +322,9 @@ Example configuration file:
 
 # Exclude .git directories
 \-\-exclude .git
+
+# Read excludes from ~/.ncduexcludes, ignore error if the file does not exist
+@--exclude-from ~/.ncduexcludes
 .Ed
 .
 .Sh KEYS

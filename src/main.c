@@ -129,6 +129,7 @@ struct argparser {
   char *last_arg;
   char shortbuf[2];
   char argsep;
+  char ignerror;
 } argparser_state;
 
 static char *argparser_pop(struct argparser *p) {
@@ -148,14 +149,14 @@ static int argparser_shortopt(struct argparser *p, char *buf) {
   return 1;
 }
 
-/* Returns 0 when done, 1 if there's an option, 2 if there's a positional argument. */
+/* Returns -1 on error (only when ignerror), 0 when done, 1 if there's an option, 2 if there's a positional argument. */
 static int argparser_next(struct argparser *p) {
-  if(p->last_arg) die("Option '%s' does not expect an argument.\n", p->last);
+  if(p->last_arg) { if(p->ignerror) return -1; die("Option '%s' does not expect an argument.\n", p->last); }
   if(p->shortopt) return argparser_shortopt(p, p->shortopt);
   p->last = argparser_pop(p);
   if(!p->last) return 0;
   if(p->argsep || !*p->last || *p->last != '-') return 2;
-  if(!p->last[1]) die("Invalid option '-'.\n");
+  if(!p->last[1]) { if(p->ignerror) return -1; die("Invalid option '-'.\n"); }
   if(p->last[1] == '-' && !p->last[2]) { /* '--' argument separator */
     p->argsep = 1;
     return argparser_next(p);
@@ -185,7 +186,7 @@ static char *argparser_arg(struct argparser *p) {
     return tmp;
   }
   tmp = argparser_pop(p);
-  if(!tmp) die("Option '%s' requires an argument.\n", p->last);
+  if(!tmp) { if(p->ignerror) return NULL; die("Option '%s' requires an argument.\n", p->last); }
   return tmp;
 }
 
@@ -224,12 +225,14 @@ static int arg_option(int infile) {
   else if(OPT("--disable-natsort")) dirlist_natsort = 0;
   else if(OPT("--graph-style")) {
     arg = ARG;
-    if (strcmp(arg, "hash") == 0) graph_style = 0;
+    if (!arg) return 1;
+    else if (strcmp(arg, "hash") == 0) graph_style = 0;
     else if (strcmp(arg, "half-block") == 0) graph_style = 1;
     else if (strcmp(arg, "eighth-block") == 0 || strcmp(arg, "eigth-block") == 0) graph_style = 2;
-    else die("Unknown --graph-style option: %s.\n", arg);
+    else if (!argparser_state.ignerror) die("Unknown --graph-style option: %s.\n", arg);
   } else if(OPT("--sort")) {
     arg = ARG;
+    if (!arg) return 1;
     tmp = strrchr(arg, '-');
     if(tmp && (strcmp(tmp, "-asc") == 0 || strcmp(tmp, "-desc") == 0)) *tmp = 0;
 
@@ -248,7 +251,8 @@ static int arg_option(int infile) {
     } else if(strcmp(arg, "mtime") == 0) {
       dirlist_sort_col = DL_COL_MTIME;
       dirlist_sort_desc = 0;
-    } else die("Invalid argument to --sort: '%s'.\n", arg);
+    } else if(argparser_state.ignerror) return 1;
+    else die("Invalid argument to --sort: '%s'.\n", arg);
 
     if(tmp && !*tmp) dirlist_sort_desc = tmp[1] == 'd';
   } else if(OPT("--apparent-size")) show_as = 1;
@@ -261,12 +265,16 @@ static int arg_option(int infile) {
   else if(OPT("-L") || OPT("--follow-symlinks")) follow_symlinks = 1;
   else if(OPT("--no-follow-symlinks")) follow_symlinks = 0;
   else if(OPT("--exclude")) {
-    arg = infile ? expanduser(ARG) : ARG;
+    arg = ARG;
+    if(!arg) return 1;
+    if(infile) arg = expanduser(arg);
     exclude_add(arg);
     if(infile) free(arg);
   } else if(OPT("-X") || OPT("--exclude-from")) {
-    arg = infile ? expanduser(ARG) : ARG;
-    if(exclude_addfile(arg)) die("Can't open %s: %s\n", arg, strerror(errno));
+    arg = ARG;
+    if(!arg) return 1;
+    if(infile) arg = expanduser(arg);
+    if(exclude_addfile(arg)) { if (argparser_state.ignerror) return 1; die("Can't open %s: %s\n", arg, strerror(errno)); }
     if(infile) free(arg);
   } else if(OPT("--exclude-caches")) cachedir_tags = 1;
   else if(OPT("--include-caches")) cachedir_tags = 0;
@@ -280,10 +288,11 @@ static int arg_option(int infile) {
   else if(OPT("--no-confirm-delete")) delete_confirm = 0;
   else if(OPT("--color")) {
     arg = ARG;
-    if(strcmp(arg, "off") == 0) uic_theme = 0;
+    if (!arg) return 1;
+    else if(strcmp(arg, "off") == 0) uic_theme = 0;
     else if(strcmp(arg, "dark") == 0) uic_theme = 1;
     else if(strcmp(arg, "dark-bg") == 0) uic_theme = 2;
-    else die("Unknown --color option: %s\n", arg);
+    else if (!argparser_state.ignerror) die("Unknown --color option: %s\n", arg);
   } else return 0;
   return 1;
 }
@@ -318,8 +327,8 @@ static void arg_help(void) {
 
 static void config_read(const char *fn) {
   FILE *f;
-  char buf[1024], *line, *tmp, **args = NULL, **argsi;
-  int r, len, argslen = 0, argssize = 0;
+  char buf[1024], *line, *tmp, *args[3];
+  int r, len;
 
   if((f = fopen(fn, "r")) == NULL) {
     if(errno == ENOENT || errno == ENOTDIR) return;
@@ -334,35 +343,34 @@ static void config_read(const char *fn) {
     line[len] = 0;
     if(len == 0 || *line == '#') continue;
 
-    /* Reserve at least 3 spots, one for the option, one for a possible argument and one for the final NULL. */
-    if(argslen+3 >= argssize) {
-      argssize = argssize ? argssize*2 : 32;
-      args = xrealloc(args, sizeof(char *)*argssize);
+    memset(&argparser_state, 0, sizeof(struct argparser));
+    argparser_state.argv = args;
+
+    if (*line == '@') {
+        argparser_state.ignerror = 1;
+        line++;
+        if (!*line || *line == '#') continue;
     }
-    for(tmp=line; *tmp && *tmp != ' ' && *tmp != '\t' && *tmp != '='; tmp++);
+    args[argparser_state.argc++] = line;
+
+    for(tmp=line; *tmp && *tmp != ' ' && *tmp != '\t'; tmp++);
     while(*tmp && (*tmp == ' ' || *tmp == '\t')) {
       *tmp = 0;
       tmp++;
     }
-    args[argslen++] = xstrdup(line);
-    if(*tmp) args[argslen++] = xstrdup(tmp);
+    if(*tmp) args[argparser_state.argc++] = tmp;
+    args[argparser_state.argc] = NULL;
+
+    while((r = argparser_next(&argparser_state)) > 0) {
+      if(r == 2 || !arg_option(1)) {
+        if (argparser_state.ignerror) break;
+        die("Unknown option in config file '%s': %s.\nRun with --ignore-config to skip reading config files.\n", fn, argparser_state.last);
+      }
+    }
   }
   if(ferror(f))
     die("Error reading from %s: %s\nRun with --ignore-config to skip reading config files.\n", fn, strerror(errno));
   fclose(f);
-  if(!argslen) return;
-
-  args[argslen] = NULL;
-  memset(&argparser_state, 0, sizeof(struct argparser));
-  argparser_state.argv = args;
-  argparser_state.argc = argslen;
-
-  while((r = argparser_next(&argparser_state)) > 0)
-    if(r == 2 || !arg_option(1))
-      die("Unknown option in config file '%s': %s.\nRun with --ignore-config to skip reading config files.\n", fn, argparser_state.last);
-
-  for(argsi=args; argsi && *argsi; argsi++) free(*argsi);
-  free(args);
 }
 
 
