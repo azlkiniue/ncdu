@@ -124,6 +124,7 @@ const Args = struct {
     last_arg: ?[:0]const u8 = null, // In the case of --option=<arg>
     shortbuf: [2]u8 = undefined,
     argsep: bool = false,
+    ignerror: bool = false,
 
     const Self = @This();
     const Option = struct {
@@ -153,22 +154,27 @@ const Args = struct {
         return .{ .opt = true, .val = &self.shortbuf };
     }
 
+    pub fn die(self: *const Self, comptime msg: []const u8, args: anytype) !noreturn {
+        if (self.ignerror) return error.InvalidArg;
+        ui.die(msg, args);
+    }
+
     /// Return the next option or positional argument.
     /// 'opt' indicates whether it's an option or positional argument,
     /// 'val' will be either -x, --something or the argument.
-    pub fn next(self: *Self) ?Option {
-        if (self.last_arg != null) ui.die("Option '{s}' does not expect an argument.\n", .{ self.last.? });
+    pub fn next(self: *Self) !?Option {
+        if (self.last_arg != null) try self.die("Option '{s}' does not expect an argument.\n", .{ self.last.? });
         if (self.short) |s| return self.shortopt(s);
         const val = self.pop() orelse return null;
         if (self.argsep or val.len == 0 or val[0] != '-') return Option{ .opt = false, .val = val };
-        if (val.len == 1) ui.die("Invalid option '-'.\n", .{});
+        if (val.len == 1) try self.die("Invalid option '-'.\n", .{});
         if (val.len == 2 and val[1] == '-') {
             self.argsep = true;
             return self.next();
         }
         if (val[1] == '-') {
             if (std.mem.indexOfScalar(u8, val, '=')) |sep| {
-                if (sep == 2) ui.die("Invalid option '{s}'.\n", .{val});
+                if (sep == 2) try self.die("Invalid option '{s}'.\n", .{val});
                 self.last_arg = val[sep+1.. :0];
                 self.last = val[0..sep];
                 return Option{ .opt = true, .val = self.last.? };
@@ -180,7 +186,7 @@ const Args = struct {
     }
 
     /// Returns the argument given to the last returned option. Dies with an error if no argument is provided.
-    pub fn arg(self: *Self) [:0]const u8 {
+    pub fn arg(self: *Self) ![:0]const u8 {
         if (self.short) |a| {
             defer self.short = null;
             return a;
@@ -190,11 +196,11 @@ const Args = struct {
             return a;
         }
         if (self.pop()) |o| return o;
-        ui.die("Option '{s}' requires an argument.\n", .{ self.last.? });
+        try self.die("Option '{s}' requires an argument.\n", .{ self.last.? });
     }
 };
 
-fn argConfig(args: *Args, opt: Args.Option, infile: bool) bool {
+fn argConfig(args: *Args, opt: Args.Option, infile: bool) !void {
     if (opt.is("-q") or opt.is("--slow-ui-updates")) config.update_delay = 2*std.time.ns_per_s
     else if (opt.is("--fast-ui-updates")) config.update_delay = 100*std.time.ns_per_ms
     else if (opt.is("-x") or opt.is("--one-file-system")) config.same_fs = true
@@ -224,13 +230,13 @@ fn argConfig(args: *Args, opt: Args.Option, infile: bool) bool {
     else if (opt.is("--enable-natsort")) config.sort_natural = true
     else if (opt.is("--disable-natsort")) config.sort_natural = false
     else if (opt.is("--graph-style")) {
-        const val = args.arg();
+        const val = try args.arg();
         if (std.mem.eql(u8, val, "hash")) config.graph_style = .hash
         else if (std.mem.eql(u8, val, "half-block")) config.graph_style = .half
         else if (std.mem.eql(u8, val, "eighth-block") or std.mem.eql(u8, val, "eigth-block")) config.graph_style = .eighth
-        else ui.die("Unknown --graph-style option: {s}.\n", .{val});
+        else try args.die("Unknown --graph-style option: {s}.\n", .{val});
     } else if (opt.is("--sort")) {
-        var val: []const u8 = args.arg();
+        var val: []const u8 = try args.arg();
         var ord: ?config.SortOrder = null;
         if (std.mem.endsWith(u8, val, "-asc")) {
             val = val[0..val.len-4];
@@ -254,13 +260,13 @@ fn argConfig(args: *Args, opt: Args.Option, infile: bool) bool {
         } else if (std.mem.eql(u8, val, "mtime")) {
             config.sort_col = .mtime;
             config.sort_order = ord orelse .asc;
-        } else ui.die("Unknown --sort option: {s}.\n", .{val});
+        } else try args.die("Unknown --sort option: {s}.\n", .{val});
     } else if (opt.is("--shared-column")) {
-        const val = args.arg();
+        const val = try args.arg();
         if (std.mem.eql(u8, val, "off")) config.show_shared = .off
         else if (std.mem.eql(u8, val, "shared")) config.show_shared = .shared
         else if (std.mem.eql(u8, val, "unique")) config.show_shared = .unique
-        else ui.die("Unknown --shared-column option: {s}.\n", .{val});
+        else try args.die("Unknown --shared-column option: {s}.\n", .{val});
     } else if (opt.is("--apparent-size")) config.show_blocks = false
     else if (opt.is("--disk-usage")) config.show_blocks = true
     else if (opt.is("-0")) config.scan_ui = .none
@@ -271,13 +277,13 @@ fn argConfig(args: *Args, opt: Args.Option, infile: bool) bool {
     else if (opt.is("-L") or opt.is("--follow-symlinks")) config.follow_symlinks = true
     else if (opt.is("--no-follow-symlinks")) config.follow_symlinks = false
     else if (opt.is("--exclude")) {
-        const arg = if (infile) (util.expanduser(args.arg(), allocator) catch unreachable) else args.arg();
+        const arg = if (infile) (util.expanduser(try args.arg(), allocator) catch unreachable) else try args.arg();
         defer if (infile) allocator.free(arg);
         exclude.addPattern(arg);
     } else if (opt.is("-X") or opt.is("--exclude-from")) {
-        const arg = if (infile) (util.expanduser(args.arg(), allocator) catch unreachable) else args.arg();
+        const arg = if (infile) (util.expanduser(try args.arg(), allocator) catch unreachable) else try args.arg();
         defer if (infile) allocator.free(arg);
-        readExcludeFile(arg) catch |e| ui.die("Error reading excludes from {s}: {s}.\n", .{ arg, ui.errorString(e) });
+        readExcludeFile(arg) catch |e| try args.die("Error reading excludes from {s}: {s}.\n", .{ arg, ui.errorString(e) });
     } else if (opt.is("--exclude-caches")) config.exclude_caches = true
     else if (opt.is("--include-caches")) config.exclude_caches = false
     else if (opt.is("--exclude-kernfs")) config.exclude_kernfs = true
@@ -285,29 +291,29 @@ fn argConfig(args: *Args, opt: Args.Option, infile: bool) bool {
     else if (opt.is("-c") or opt.is("--compress")) config.compress = true
     else if (opt.is("--no-compress")) config.compress = false
     else if (opt.is("--compress-level")) {
-        const val = args.arg();
-        config.complevel = std.fmt.parseInt(u8, val, 10) catch ui.die("Invalid number for --compress-level: {s}.\n", .{val});
-        if (config.complevel <= 0 or config.complevel > 20) ui.die("Invalid number for --compress-level: {s}.\n", .{val});
+        const val = try args.arg();
+        const num = std.fmt.parseInt(u8, val, 10) catch try args.die("Invalid number for --compress-level: {s}.\n", .{val});
+        if (num <= 0 or num > 20) try args.die("Invalid number for --compress-level: {s}.\n", .{val});
+        config.complevel = num;
     } else if (opt.is("--export-block-size")) {
-        const val = args.arg();
-        const num = std.fmt.parseInt(u14, val, 10) catch ui.die("Invalid number for --export-block-size: {s}.\n", .{val});
-        if (num < 4 or num > 16000) ui.die("Invalid number for --export-block-size: {s}.\n", .{val});
+        const val = try args.arg();
+        const num = std.fmt.parseInt(u14, val, 10) catch try args.die("Invalid number for --export-block-size: {s}.\n", .{val});
+        if (num < 4 or num > 16000) try args.die("Invalid number for --export-block-size: {s}.\n", .{val});
         config.export_block_size = @as(usize, num) * 1024;
     } else if (opt.is("--confirm-quit")) config.confirm_quit = true
     else if (opt.is("--no-confirm-quit")) config.confirm_quit = false
     else if (opt.is("--confirm-delete")) config.confirm_delete = true
     else if (opt.is("--no-confirm-delete")) config.confirm_delete = false
     else if (opt.is("--color")) {
-        const val = args.arg();
+        const val = try args.arg();
         if (std.mem.eql(u8, val, "off")) config.ui_color = .off
         else if (std.mem.eql(u8, val, "dark")) config.ui_color = .dark
         else if (std.mem.eql(u8, val, "dark-bg")) config.ui_color = .darkbg
-        else ui.die("Unknown --color option: {s}.\n", .{val});
+        else try args.die("Unknown --color option: {s}.\n", .{val});
     } else if (opt.is("-t") or opt.is("--threads")) {
-        const val = args.arg();
-        config.threads = std.fmt.parseInt(u8, val, 10) catch ui.die("Invalid number of --threads: {s}.\n", .{val});
-    } else return false;
-    return true;
+        const val = try args.arg();
+        config.threads = std.fmt.parseInt(u8, val, 10) catch try args.die("Invalid number of --threads: {s}.\n", .{val});
+    } else return error.UnknownOption;
 }
 
 fn tryReadArgsFile(path: [:0]const u8) void {
@@ -317,8 +323,6 @@ fn tryReadArgsFile(path: [:0]const u8) void {
         else => ui.die("Error opening {s}: {s}\nRun with --ignore-config to skip reading config files.\n", .{ path, ui.errorString(e) }),
     };
     defer f.close();
-
-    var arglist = std.ArrayList([:0]const u8).init(allocator);
 
     var rd_ = std.io.bufferedReader(f.reader());
     const rd = rd_.reader();
@@ -334,22 +338,36 @@ fn tryReadArgsFile(path: [:0]const u8) void {
         };
         const line_ = line_fbs.getWritten();
 
+        var argc: usize = 0;
+        var ignerror = false;
+        var arglist: [2][:0]const u8 = .{ "", "" };
+
         var line = std.mem.trim(u8, line_, &std.ascii.whitespace);
+        if (line.len > 0 and line[0] == '@') {
+            ignerror = true;
+            line = line[1..];
+        }
         if (line.len == 0 or line[0] == '#') continue;
         if (std.mem.indexOfAny(u8, line, " \t=")) |i| {
-            arglist.append(allocator.dupeZ(u8, line[0..i]) catch unreachable) catch unreachable;
+            arglist[argc] = allocator.dupeZ(u8, line[0..i]) catch unreachable;
+            argc += 1;
             line = std.mem.trimLeft(u8, line[i+1..], &std.ascii.whitespace);
         }
-        arglist.append(allocator.dupeZ(u8, line) catch unreachable) catch unreachable;
-    }
+        arglist[argc] = allocator.dupeZ(u8, line) catch unreachable;
+        argc += 1;
 
-    var args = Args.init(arglist.items);
-    while (args.next()) |opt| {
-        if (!argConfig(&args, opt, true))
-            ui.die("Unrecognized option in config file '{s}': {s}.\nRun with --ignore-config to skip reading config files.\n", .{path, opt.val});
+        var args = Args.init(arglist[0..argc]);
+        args.ignerror = ignerror;
+        while (args.next() catch null) |opt| {
+            if (argConfig(&args, opt, true)) |_| {}
+            else |_| {
+                if (ignerror) break;
+                ui.die("Unrecognized option in config file '{s}': {s}.\nRun with --ignore-config to skip reading config files.\n", .{path, opt.val});
+            }
+        }
+        allocator.free(arglist[0]);
+        if (argc == 2) allocator.free(arglist[1]);
     }
-    for (arglist.items) |i| allocator.free(i);
-    arglist.deinit();
 }
 
 fn version() noreturn {
@@ -526,8 +544,8 @@ pub fn main() void {
         const arglist = std.process.argsAlloc(allocator) catch unreachable;
         defer std.process.argsFree(allocator, arglist);
         var args = Args.init(arglist);
-        _ = args.next(); // program name
-        while (args.next()) |opt| {
+        _ = args.next() catch unreachable; // program name
+        while (args.next() catch unreachable) |opt| {
             if (!opt.opt) {
                 // XXX: ncdu 1.x doesn't error, it just silently ignores all but the last argument.
                 if (scan_dir != null) ui.die("Multiple directories given, see ncdu -h for help.\n", .{});
@@ -537,15 +555,15 @@ pub fn main() void {
             if (opt.is("-h") or opt.is("-?") or opt.is("--help")) help()
             else if (opt.is("-v") or opt.is("-V") or opt.is("--version")) version()
             else if (opt.is("-o") and (export_json != null or export_bin != null)) ui.die("The -o flag can only be given once.\n", .{})
-            else if (opt.is("-o")) export_json = allocator.dupeZ(u8, args.arg()) catch unreachable
+            else if (opt.is("-o")) export_json = allocator.dupeZ(u8, args.arg() catch unreachable) catch unreachable
             else if (opt.is("-O") and (export_json != null or export_bin != null)) ui.die("The -O flag can only be given once.\n", .{})
-            else if (opt.is("-O")) export_bin = allocator.dupeZ(u8, args.arg()) catch unreachable
+            else if (opt.is("-O")) export_bin = allocator.dupeZ(u8, args.arg() catch unreachable) catch unreachable
             else if (opt.is("-f") and import_file != null) ui.die("The -f flag can only be given once.\n", .{})
-            else if (opt.is("-f")) import_file = allocator.dupeZ(u8, args.arg()) catch unreachable
+            else if (opt.is("-f")) import_file = allocator.dupeZ(u8, args.arg() catch unreachable) catch unreachable
             else if (opt.is("--ignore-config")) {}
             else if (opt.is("--quit-after-scan")) quit_after_scan = true // undocumented feature to help with benchmarking scan/import
-            else if (argConfig(&args, opt, false)) {}
-            else ui.die("Unrecognized option '{s}'.\n", .{opt.val});
+            else if (argConfig(&args, opt, false)) |_| {}
+            else |_| ui.die("Unrecognized option '{s}'.\n", .{opt.val});
         }
     }
 
