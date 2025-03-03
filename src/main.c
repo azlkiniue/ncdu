@@ -298,29 +298,54 @@ static int arg_option(int infile) {
 }
 
 static void arg_help(void) {
-  printf("ncdu <options> <directory>\n\n");
-  printf("  -h,--help                  This help message\n");
-  printf("  -q                         Quiet mode, refresh interval 2 seconds\n");
-  printf("  -v,-V,--version            Print version\n");
-  printf("  -x                         Same filesystem\n");
-  printf("  -e                         Enable extended information\n");
-  printf("  -r                         Read only\n");
-  printf("  -o FILE                    Export scanned directory to FILE\n");
-  printf("  -f FILE                    Import scanned directory from FILE\n");
-  printf("  -0,-1,-2                   UI to use when scanning (0=none,2=full ncurses)\n");
-  printf("  --si                       Use base 10 (SI) prefixes instead of base 2\n");
-  printf("  --exclude PATTERN          Exclude files that match PATTERN\n");
-  printf("  -X, --exclude-from FILE    Exclude files that match any pattern in FILE\n");
-  printf("  -L, --follow-symlinks      Follow symbolic links (excluding directories)\n");
-  printf("  --exclude-caches           Exclude directories containing CACHEDIR.TAG\n");
+  printf(
+  "ncdu <options> <directory>\n"
+  "\n"
+  "Mode selection:\n"
+  "  -h, --help                 This help message\n"
+  "  -v, -V, --version          Print version\n"
+  "  -f FILE                    Import scanned directory from FILE\n"
+  "  -o FILE                    Export scanned directory to FILE in JSON format\n"
+  "  -e, --extended             Enable extended information\n"
+  "  --ignore-config            Don't load config files\n"
+  "\n"
+  "Scan options:\n"
+  "  -x, --one-file-system      Stay on the same filesystem\n"
+  "  --exclude PATTERN          Exclude files that match PATTERN\n"
+  "  -X, --exclude-from FILE    Exclude files that match any pattern in FILE\n"
+  "  --exclude-caches           Exclude directories containing CACHEDIR.TAG\n"
+  "  -L, --follow-symlinks      Follow symbolic links (excluding directories)\n"
 #if HAVE_LINUX_MAGIC_H && HAVE_SYS_STATFS_H && HAVE_STATFS
-  printf("  --exclude-kernfs           Exclude Linux pseudo filesystems (procfs,sysfs,cgroup,...)\n");
+  "  --exclude-kernfs           Exclude Linux pseudo filesystems (procfs,sysfs,cgroup,...)\n"
 #endif
 #if HAVE_SYS_ATTR_H && HAVE_GETATTRLIST && HAVE_DECL_ATTR_CMNEXT_NOFIRMLINKPATH
-  printf("  --exclude-firmlinks        Exclude firmlinks on macOS\n");
+  "  --exclude-firmlinks        Exclude firmlinks on macOS\n"
 #endif
-  printf("  --confirm-quit             Confirm quitting ncdu\n");
-  printf("  --color SCHEME             Set color scheme (off/dark/dark-bg)\n");
+  "\n"
+  "Interface options:\n"
+  "  -0, -1, -2                 UI to use when scanning (0=none,2=full ncurses)\n"
+  "  -q, --slow-ui-updates      \"Quiet\" mode, refresh interval 2 seconds\n"
+  "  --enable-shell             Enable/disable shell spawning feature\n"
+  "  --enable-delete            Enable/disable file deletion feature\n"
+  "  --enable-refresh           Enable/disable directory refresh feature\n"
+  "  -r                         Read only (--disable-delete)\n"
+  "  -rr                        Read only++ (--disable-delete & --disable-shell)\n"
+  "  --si                       Use base 10 (SI) prefixes instead of base 2\n"
+  "  --apparent-size            Show apparent size instead of disk usage by default\n"
+  "  --hide-hidden              Hide \"hidden\" or excluded files by default\n"
+  "  --show-itemcount           Show item count column by default\n"
+  "  --show-mtime               Show mtime column by default (requires `-e`)\n"
+  "  --show-graph               Show graph column by default\n"
+  "  --show-percent             Show percent column by default\n"
+  "  --graph-style STYLE        hash / half-block / eighth-block\n"
+  "  --sort COLUMN-(asc/desc)   disk-usage / name / apparent-size / itemcount / mtime\n"
+  "  --enable-natsort           Use natural order when sorting by name\n"
+  "  --group-directories-first  Sort directories before files\n"
+  "  --confirm-quit             Ask confirmation before quitting ncdu\n"
+  "  --no-confirm-delete        Don't ask confirmation before deletion\n"
+  "  --color SCHEME             off / dark / dark-bg\n"
+  "\n"
+  "Refer to `man ncdu` for more information.\n");
   exit(0);
 }
 
