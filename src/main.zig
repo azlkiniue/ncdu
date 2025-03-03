@@ -381,28 +381,54 @@ fn help() noreturn {
     stdout.writeAll(
     \\ncdu <options> <directory>
     \\
-    \\Options:
-    \\  -h,--help                  This help message
-    \\  -q                         Quiet mode, refresh interval 2 seconds
-    \\  -v,-V,--version            Print version
-    \\  -x                         Same filesystem
-    \\  -e                         Enable extended information
-    \\  -t NUM                     Number of threads to use
-    \\  -r                         Read only
-    \\  -o FILE                    Export scanned directory to FILE
+    \\Mode selection:
+    \\  -h, --help                 This help message
+    \\  -v, -V, --version          Print version
     \\  -f FILE                    Import scanned directory from FILE
-    \\  -0,-1,-2                   UI to use when scanning (0=none,2=full ncurses)
-    \\  --si                       Use base 10 (SI) prefixes instead of base 2
-    \\  --exclude PATTERN          Exclude files that match PATTERN
-    \\  -X, --exclude-from FILE    Exclude files that match any pattern in FILE
-    \\  -L, --follow-symlinks      Follow symbolic links (excluding directories)
-    \\  --exclude-caches           Exclude directories containing CACHEDIR.TAG
-    \\  --exclude-kernfs           Exclude Linux pseudo filesystems (procfs,sysfs,cgroup,...)
-    \\  --confirm-quit             Confirm quitting ncdu
-    \\  --color SCHEME             Set color scheme (off/dark/dark-bg)
+    \\  -o FILE                    Export scanned directory to FILE in JSON format
+    \\  -O FILE                    Export scanned directory to FILE in binary format
+    \\  -e, --extended             Enable extended information
     \\  --ignore-config            Don't load config files
     \\
-    \\Refer to `man ncdu` for the full list of options.
+    \\Scan options:
+    \\  -x, --one-file-system      Stay on the same filesystem
+    \\  --exclude PATTERN          Exclude files that match PATTERN
+    \\  -X, --exclude-from FILE    Exclude files that match any pattern in FILE
+    \\  --exclude-caches           Exclude directories containing CACHEDIR.TAG
+    \\  -L, --follow-symlinks      Follow symbolic links (excluding directories)
+    \\  --exclude-kernfs           Exclude Linux pseudo filesystems (procfs,sysfs,cgroup,...)
+    \\  -t NUM                     Scan with NUM threads
+    \\
+    \\Export options:
+    \\  -c, --compress             Use Zstandard compression with `-o`
+    \\  --compress-level NUM       Set compression level
+    \\  --export-block-size KIB    Set export block size with `-O`
+    \\
+    \\Interface options:
+    \\  -0, -1, -2                 UI to use when scanning (0=none,2=full ncurses)
+    \\  -q, --slow-ui-updates      "Quiet" mode, refresh interval 2 seconds
+    \\  --enable-shell             Enable/disable shell spawning feature
+    \\  --enable-delete            Enable/disable file deletion feature
+    \\  --enable-refresh           Enable/disable directory refresh feature
+    \\  -r                         Read only (--disable-delete)
+    \\  -rr                        Read only++ (--disable-delete & --disable-shell)
+    \\  --si                       Use base 10 (SI) prefixes instead of base 2
+    \\  --apparent-size            Show apparent size instead of disk usage by default
+    \\  --hide-hidden              Hide "hidden" or excluded files by default
+    \\  --show-itemcount           Show item count column by default
+    \\  --show-mtime               Show mtime column by default (requires `-e`)
+    \\  --show-graph               Show graph column by default
+    \\  --show-percent             Show percent column by default
+    \\  --graph-style STYLE        hash / half-block / eighth-block
+    \\  --shared-column            off / shared / unique
+    \\  --sort COLUMN-(asc/desc)   disk-usage / name / apparent-size / itemcount / mtime
+    \\  --enable-natsort           Use natural order when sorting by name
+    \\  --group-directories-first  Sort directories before files
+    \\  --confirm-quit             Ask confirmation before quitting ncdu
+    \\  --no-confirm-delete        Don't ask confirmation before deletion
+    \\  --color SCHEME             off / dark / dark-bg
+    \\
+    \\Refer to `man ncdu` for more information.
     \\
     ) catch {};
     std.process.exit(0);
