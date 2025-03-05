@@ -1,3 +1,10 @@
+1.22 - 2025-03-05
+	- Add support for @-prefixed lines to ignore errors in config file (from 2.8)
+	- List all supported options in `--help` (from 2.8)
+	- Use `kB` instead of `KB` in `--si` mode (from 2.8)
+	- Add `--graph-style` option (from 2.1)
+	- Fix supported range of uid/gid numbers
+
 1.21 - 2024-11-19
 	- Perform tilde expansion on paths in the config file (from 2.7)
 	- Fix JSON import of escaped UTF-16 surrogate pairs (from 2.7)
