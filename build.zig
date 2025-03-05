@@ -18,7 +18,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     main_mod.linkSystemLibrary("ncursesw", .{});
-    main_mod.linkSystemLibrary("libzstd", .{});
+    main_mod.linkSystemLibrary("zstd", .{});
 
     const exe = b.addExecutable(.{
         .name = "ncdu",
