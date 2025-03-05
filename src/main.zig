@@ -727,13 +727,13 @@ test "argument parser" {
     const T = struct {
         a: Args,
         fn opt(self: *@This(), isopt: bool, val: []const u8) !void {
-            const o = self.a.next().?;
+            const o = (self.a.next() catch unreachable).?;
             try std.testing.expectEqual(isopt, o.opt);
             try std.testing.expectEqualStrings(val, o.val);
             try std.testing.expectEqual(o.is(val), isopt);
         }
         fn arg(self: *@This(), val: []const u8) !void {
-            try std.testing.expectEqualStrings(val, self.a.arg());
+            try std.testing.expectEqualStrings(val, self.a.arg() catch unreachable);
         }
     };
     var t = T{ .a = Args.init(&lst) };
