@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Yorhel <projects@yorhel.nl>
 // SPDX-License-Identifier: MIT
 
-pub const program_version = "2.7";
+pub const program_version = "2.8";
 
 const std = @import("std");
 const model = @import("model.zig");
